@@ -78,7 +78,7 @@ include_directories("${PROTOBUF_INCLUDE_DIR}")
 # Tensorflow
   message(STATUS "Fetching Tensorflow")
   add_definitions(-DUSE_TF)
-  if (CUDA_FOUND)
+  if (CUDA_FOUND AND NOT USE_TF_CPU_ONLY)
     ExternalProject_Add(
       tensorflow
       PREFIX tensorflow
@@ -90,6 +90,7 @@ include_directories("${PROTOBUF_INCLUDE_DIR}")
       BUILD_IN_SOURCE 1
       )
   else()
+    add_definitions(-DUSE_TF_CPU_ONLY)
     ExternalProject_Add(
       tensorflow
       PREFIX tensorflow
@@ -117,7 +118,7 @@ if (CAFFE_INC_DIR AND CAFFE_LIB_DIR)
   # do nothing
 else()
   message(STATUS "Configuring customized caffe")
-  if (CUDA_FOUND)
+  if (CUDA_FOUND AND NOT USE_CAFFE_CPU_ONLY)
     if (CUDA_ARCH)
     else()
       if (NOT ${CUDA_VERSION} MATCHES "8.0")
@@ -126,7 +127,7 @@ else()
 	set(CUDA_ARCH "-gencode arch=compute_30,code=sm_30 -gencode arch=compute_35,code=sm_35 -gencode arch=compute_50,code=sm_50 -gencode arch=compute_52,code=sm_52 -gencode arch=compute_60,code=sm_60 -gencode arch=compute_61,code=sm_61 -gencode arch=compute_61,code=compute_61")
       endif()
     endif()
-    if (HAVE_CUDNN)
+    if (HAVE_CUDNN AND USE_CUDNN)
       if (USE_TF)
 	ExternalProject_Add(
 	  caffe_dd
@@ -155,7 +156,7 @@ else()
 	  PREFIX caffe_dd
 	  INSTALL_DIR ${CMAKE_BINARY_DIR}
 	  URL https://github.com/beniz/caffe/archive/master.tar.gz
-	  CONFIGURE_COMMAND ln -sf Makefile.config.gpu Makefile.config && echo "OPENCV_VERSION:=${OPENCV_VERSION}" >> Makefile.config && ${CMAKE_COMMAND} -E env PATH=${CMAKE_BINARY_DIR}/protobuf/bin:$ENV{PATH} make -j${N}
+	  CONFIGURE_COMMAND ln -sf Makefile.config.gpu Makefile.config && echo "OPENCV_VERSION:=${OPENCV_VERSION}" >> Makefile.config && ${CMAKE_COMMAND} -E env PATH=${CMAKE_BINARY_DIR}/protobuf/bin:$ENV{PATH} make CUDA_ARCH=${CUDA_ARCH} -j${N}
 	  INSTALL_COMMAND ""
 	  BUILD_IN_SOURCE 1
 	  )
@@ -165,13 +166,14 @@ else()
 	  PREFIX caffe_dd
 	  INSTALL_DIR ${CMAKE_BINARY_DIR}
 	  URL https://github.com/beniz/caffe/archive/master.tar.gz
-	  CONFIGURE_COMMAND ln -sf Makefile.config.gpu Makefile.config && echo "OPENCV_VERSION:=${OPENCV_VERSION}" >> Makefile.config && make -j${N}
+	  CONFIGURE_COMMAND ln -sf Makefile.config.gpu Makefile.config && echo "OPENCV_VERSION:=${OPENCV_VERSION}" >> Makefile.config && make CUDA_ARCH=${CUDA_ARCH} -j${N}
 	  INSTALL_COMMAND ""
 	  BUILD_IN_SOURCE 1
 	  )
       endif()
-    endif() # USE_CUDNN
-  else()
+    endif() # HAVE_CUDNN
+  else() # CUDA_FOUND
+    add_definitions(-DUSE_CAFFE_CPU_ONLY)
     if (USE_TF)
       ExternalProject_Add(
 	caffe_dd
@@ -211,7 +213,8 @@ endif()
 if (USE_XGBOOST)
   message(STATUS "Configuring XGBoost")
   add_definitions(-DUSE_XGBOOST)
-  if (CUDA_FOUND)
+  if (CUDA_FOUND AND USE_XGBOOST_GPU)
+    add_definitions(-DUSE_XGBOOST_GPU)
     set(XGB_NVCC_FLAGS,"--expt-extended-lambda;-gencode arch=compute_35,code=compute_35")
     ExternalProject_Add(
       xgboost
@@ -219,7 +222,7 @@ if (USE_XGBOOST)
       INSTALL_DIR ${CMAKE_BINARY_DIR}
       DOWNLOAD_COMMAND git clone --recursive https://github.com/dmlc/xgboost.git
       UPDATE_COMMAND git submodule foreach git pull origin master
-      CONFIGURE_COMMAND wget https://github.com/NVlabs/cub/archive/1.6.4.zip && unzip 1.6.4.zip && rm 1.6.4.zip && ${CMAKE_BINARY_DIR}/patches/test_patch.sh ${CMAKE_BINARY_DIR}/patches/xgb/xgb_static_gpu_build.patch && mkdir build && cd build &&
+      CONFIGURE_COMMAND wget https://github.com/NVlabs/cub/archive/1.6.4.zip && unzip 1.6.4.zip && rm 1.6.4.zip && ${CMAKE_BINARY_DIR}/patches/test_patch.sh ${CMAKE_BINARY_DIR}/patches/xgb/xgb_cmakelist_fix.patch && mkdir build && cd build &&
       cmake .. -DPLUGIN_UPDATER_GPU=ON -DCUB_DIRECTORY=${CMAKE_BINARY_DIR}/xgboost/src/xgboost/cub-1.6.4/ -DCUDA_NVCC_FLAGS=-Xcompiler\ -fPIC\ --expt-extended-lambda\ -gencode\ arch=compute_30,code=compute_30\ -gencode\ arch=compute_35,code=compute_35\ -gencode\ arch=compute_50,code=compute_50\ -gencode\ arch=compute_52,code=compute_52\ -gencode\ arch=compute_61,code=compute_61 && make && make
       INSTALL_COMMAND ""
       BUILD_IN_SOURCE 1
@@ -231,7 +234,7 @@ if (USE_XGBOOST)
       INSTALL_DIR ${CMAKE_BINARY_DIR}
       DOWNLOAD_COMMAND git clone --recursive https://github.com/dmlc/xgboost.git
       UPDATE_COMMAND git submodule foreach git pull origin master
-      CONFIGURE_COMMAND ${CMAKE_BINARY_DIR}/patches/test_patch.sh ${CMAKE_BINARY_DIR}/patches/xgb/xgb_static_gpu_build.patch && mkdir build && cd build && cmake .. && make
+      CONFIGURE_COMMAND ${CMAKE_BINARY_DIR}/patches/test_patch.sh ${CMAKE_BINARY_DIR}/patches/xgb/xgb_cmakelist_fix.patch && mkdir build && cd build && cmake .. && make
       INSTALL_COMMAND ""
       BUILD_IN_SOURCE 1
       )

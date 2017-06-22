@@ -239,12 +239,23 @@ If you would like a CPU only build, use:
 cmake .. -DUSE_CPU_ONLY=ON
 ```
 
+If you would like to constrain Caffe to CPU only, use:
+```
+cmake .. -DUSE_CAFFE_CPU_ONLY=ON
+```
+
 #### Build with XGBoost support
 
 If you would like to build with XGBoost, include the `-DUSE_XGBOOST=ON` parameter to `cmake`:
 ```
 cmake .. -DUSE_XGBOOST=ON
 ```
+
+If you would like to build the GPU support for XGBoost (experimental from DMLC), use the `-DUSE_XGBOOST_GPU=ON` parameter to `cmake`:
+```
+cmake .. -DUSE_XGBOOST=ON -DUSE_XGBOOST_GPU=ON
+```
+
 
 #### Build with Tensorflow support
 First you must install [Bazel](https://www.bazel.io/versions/master/docs/install.html#install-on-ubuntu) and Cmake with version > 3.
@@ -259,9 +270,14 @@ If you would like to build with Tensorflow, include the `-DUSE_TF=ON` paramter t
 cmake .. -DUSE_TF=ON
 ```
 
+If you would like to constrain Tensorflow to CPU, use:
+```
+cmake .. -DUSE_TF=ON -DUSE_TF_CPU_ONLY=ON
+```
+
 You can combine with XGBoost support with:
 ```
-cmake .. -DUSE_TF=on -DUSE_XGBOOST=ON
+cmake .. -DUSE_TF=ON -DUSE_XGBOOST=ON
 ```
 
 #### Build with T-SNE support
@@ -304,6 +320,42 @@ To see all options, do:
 ```
 ./dede --help
 ```
+
+### Pure command line JSON API
+
+To use deepdetect without the client/server architecture while passing the exact same JSON messages from the API:
+
+```
+./dede --jsonapi 1 <other options>
+```
+
+where `<other options>` stands for the command line parameters from the command line JSON API:
+
+```
+-info (/info JSON call) type: bool default: false
+-service_create (/service/service_name call JSON string) type: string default: ""
+-service_delete (/service/service_name DELETE call JSON string) type: string default: ""
+-service_name (service name string for JSON call /service/service_name) type: string default: ""
+-service_predict (/predict POST call JSON string) type: string default: ""
+-service_train (/train POST call JSON string) type: string default: ""
+-service_train_delete (/train DELETE call JSON string) type: string default: ""
+-service_train_status (/train GET call JSON string) type: string default: ""
+							  
+```
+
+The options above can be obtained from running
+
+```
+./dede --help
+```
+
+Example of creating a service then listing it:
+
+```
+./dede --jsonapi 1 --service_name test --service_create '{"mllib":"caffe","description":"classification service","type":"supervised","parameters":{"input":{"connector":"image"},"mllib":{"template":"googlenet","nclasses":10}},"model":{"templates":"/path/to/deepdetect/templates/caffe/","repository":"/path/to/model/"}}'
+```
+
+Note that in command line mode the `--service_xxx` calls are executed sequentially, and synchronously. Also note the logs are those from the server, the JSON API response is not available in pure command line mode.
 
 ### Run examples
 

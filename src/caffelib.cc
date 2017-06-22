@@ -58,6 +58,7 @@ namespace dd
     _ntargets = cl._ntargets;
     _autoencoder = cl._autoencoder;
     cl._net = nullptr;
+    _crop_size = cl._crop_size;
   }
 
   template <class TInputConnectorStrategy, class TOutputConnectorStrategy, class TMLModel>
@@ -70,13 +71,20 @@ namespace dd
   template <class TInputConnectorStrategy, class TOutputConnectorStrategy, class TMLModel>
   void CaffeLib<TInputConnectorStrategy,TOutputConnectorStrategy,TMLModel>::set_gpuid(const APIData &ad)
   {
-#ifndef CPU_ONLY
+#if !defined(CPU_ONLY) && !defined(USE_CAFFE_CPU_ONLY)
     if (ad.has("gpuid"))
       {
 	try
 	  {
 	    int gpuid = ad.get("gpuid").get<int>();
-	    _gpuid = {gpuid};
+	    if (gpuid == -1)
+	      {
+		int count_gpus = 0;
+		cudaGetDeviceCount(&count_gpus);
+		for (int i =0;i<count_gpus;i++)
+		  _gpuid.push_back(i);
+	      }
+	    else _gpuid = {gpuid};
 	    _gpu = true;
 	  }
 	catch(std::exception &e)
@@ -185,9 +193,34 @@ namespace dd
 	    if (ad.has("mirror"))
 	      lparam->mutable_transform_param()->set_rotate(ad.get("rotate").get<bool>());
 	    if (ad.has("crop_size"))
-	      lparam->mutable_transform_param()->set_crop_size(ad.get("crop_size").get<int>());
+	      {
+		_crop_size = ad.get("crop_size").get<int>();
+		lparam->mutable_transform_param()->set_crop_size(_crop_size);
+		caffe::LayerParameter *dlparam = net_param.mutable_layer(1); // test input layer
+		dlparam->mutable_transform_param()->set_crop_size(_crop_size);
+	      }
 	    else lparam->mutable_transform_param()->clear_crop_size();
 	  }
+	// input size
+	caffe::LayerParameter *lparam = net_param.mutable_layer(1); // test
+	caffe::LayerParameter *dlparam = deploy_net_param.mutable_layer(0);
+	if (_crop_size > 0 || (this->_inputc.width() != -1 && this->_inputc.height() != -1)) // forced width & height
+	  {
+	    int width = this->_inputc.width();
+	    int height = this->_inputc.height();
+	    if (_crop_size > 0)
+	      width = height = _crop_size;
+	    lparam->mutable_memory_data_param()->set_channels(this->_inputc.channels());
+	    lparam->mutable_memory_data_param()->set_height(height);
+	    lparam->mutable_memory_data_param()->set_width(width);
+	    dlparam->mutable_memory_data_param()->set_channels(this->_inputc.channels());
+	    dlparam->mutable_memory_data_param()->set_height(height);
+	    dlparam->mutable_memory_data_param()->set_width(width);
+	  }
+		
+	// noise parameters
+	configure_noise_and_distort(ad,net_param);
+
 	// adapt number of neuron output
 	update_protofile_classes(net_param);
 	update_protofile_classes(deploy_net_param);
@@ -209,6 +242,89 @@ namespace dd
 
     if (this->_mlmodel.read_from_repository(this->_mlmodel._repo))
       throw MLLibBadParamException("error reading or listing Caffe models in repository " + this->_mlmodel._repo);
+  }
+
+  template <class TInputConnectorStrategy, class TOutputConnectorStrategy, class TMLModel>
+  void CaffeLib<TInputConnectorStrategy,TOutputConnectorStrategy,TMLModel>::configure_noise_and_distort(const APIData &ad,
+													caffe::NetParameter &net_param)
+  {
+    if (ad.has("noise"))
+      {
+	std::vector<std::string> noise_options = {
+	  "decolorize","hist_eq","inverse","gauss_blur","posterize","erode",
+	  "saltpepper","clahe","convert_to_hsv","convert_to_lab"
+	};
+	APIData ad_noise = ad.getobj("noise");
+	caffe::LayerParameter *lparam = net_param.mutable_layer(0); // data input layer
+	caffe::TransformationParameter *trparam = lparam->mutable_transform_param();
+	caffe::NoiseParameter *nparam = trparam->mutable_noise_param();
+	if (ad_noise.has("all_effects") && ad_noise.get("all_effects").get<bool>())
+	  nparam->set_all_effects(true);
+	else
+	  {
+	    for (auto s: noise_options)
+	      {
+		if (ad_noise.has(s))
+		  {
+		    if (s == "decolorize")
+		      nparam->set_decolorize(ad_noise.get(s).get<bool>());
+		    else if (s == "hist_eq")
+		      nparam->set_hist_eq(ad_noise.get(s).get<bool>());
+		    else if (s == "inverse")
+		      nparam->set_inverse(ad_noise.get(s).get<bool>());
+		    else if (s == "gauss_blur")
+		      nparam->set_gauss_blur(ad_noise.get(s).get<bool>());
+		    else if (s == "posterize")
+		      nparam->set_hist_eq(ad_noise.get(s).get<bool>());
+		    else if (s == "erode")
+		      nparam->set_erode(ad_noise.get(s).get<bool>());
+		    else if (s == "saltpepper")
+			  nparam->set_saltpepper(ad_noise.get(s).get<bool>());
+		    else if (s == "clahe")
+		      nparam->set_clahe(ad_noise.get(s).get<bool>());
+		    else if (s == "convert_to_hsv")
+		      nparam->set_convert_to_hsv(ad_noise.get(s).get<bool>());
+		    else if (s == "convert_to_lab")
+		      nparam->set_convert_to_lab(ad_noise.get(s).get<bool>());
+		  }
+	      }
+	  }
+	if (ad_noise.has("prob"))
+	  nparam->set_prob(ad_noise.get("prob").get<double>());
+      }
+    if (ad.has("distort"))
+      {
+	std::vector<std::string> distort_options = {
+	  "brightness","contrast","saturation","hue","random_order"
+	};
+	APIData ad_distort = ad.getobj("distort");
+	caffe::LayerParameter *lparam = net_param.mutable_layer(0); // data input layer
+	caffe::TransformationParameter *trparam = lparam->mutable_transform_param();
+	caffe::DistortionParameter *nparam = trparam->mutable_distort_param();
+	if (ad_distort.has("all_effects") && ad_distort.get("all_effects").get<bool>())
+	  nparam->set_all_effects(true);
+	else
+	  {
+	    for (auto s: distort_options)
+	      {
+		if (ad_distort.has(s))
+		  {
+		    if (s == "brightness")
+		      nparam->set_brightness(ad_distort.get(s).get<bool>());
+		    else if (s == "contrast")
+		      nparam->set_contrast(ad_distort.get(s).get<bool>());
+		    else if (s == "saturation")
+		      nparam->set_saturation(ad_distort.get(s).get<bool>());
+		    else if (s == "hue")
+		      nparam->set_hue(ad_distort.get(s).get<bool>());
+		    else if (s == "random_order")
+		      nparam->set_random_order(ad_distort.get(s).get<bool>());
+		  }
+	      }
+	  }
+	if (ad_distort.has("prob"))
+	  nparam->set_prob(ad_distort.get("prob").get<double>());
+      }
   }
 
   template <class TInputConnectorStrategy, class TOutputConnectorStrategy, class TMLModel>
@@ -278,7 +394,7 @@ namespace dd
 	    LOG(ERROR) << "Error creating network";
 	    throw;
 	  }
-	LOG(INFO) << "Using pre-trained weights from " << this->_mlmodel._weights << std::endl;
+	LOG(INFO) << "Using pre-trained weights from " << this->_mlmodel._weights;
 	try
 	  {
 	    _net->CopyTrainedLayersFrom(this->_mlmodel._weights);
@@ -313,7 +429,7 @@ namespace dd
     if (ad.has("gpu"))
       _gpu = ad.get("gpu").get<bool>();
     set_gpuid(ad);
-#ifndef CPU_ONLY
+#if !defined(CPU_ONLY) && !defined(USE_CAFFE_CPU_ONLY)
     if (_gpu)
       {
 	for (auto i: _gpuid)
@@ -378,6 +494,8 @@ namespace dd
     inputc._train = true;
     APIData cad = ad;
     cad.add("has_mean_file",this->_mlmodel._has_mean_file);
+    if (_crop_size > 0)
+      cad.add("crop_size",_crop_size);
     try
       {
 	inputc.transform(cad);
@@ -405,26 +523,23 @@ namespace dd
     bool has_mean_file = false;
     int user_batch_size, batch_size, test_batch_size, test_iter;
     update_in_memory_net_and_solver(solver_param,cad,inputc,has_mean_file,user_batch_size,batch_size,test_batch_size,test_iter);
-
+    //caffe::ReadProtoFromTextFile(this->_mlmodel._solver,&solver_param);
+    
     // parameters
-#ifndef CPU_ONLY
+#if !defined(CPU_ONLY) && !defined(USE_CAFFE_CPU_ONLY)
     bool gpu = _gpu;
     if (ad_mllib.has("gpu"))
       {
 	gpu = ad_mllib.get("gpu").get<bool>();
 	if (gpu)
-	  {
-	    set_gpuid(ad_mllib);
-	  }
+	  set_gpuid(ad_mllib);
       }
     if (gpu)
       {
-	for (auto i: _gpuid)
-	  {
-	    Caffe::SetDevice(i);
-	    Caffe::DeviceQuery();
-	  }
+	solver_param.set_device_id(_gpuid.at(0));
+	Caffe::SetDevice(_gpuid.at(0));
 	Caffe::set_mode(Caffe::GPU);
+	Caffe::set_solver_count(_gpuid.size());
       }
     else Caffe::set_mode(Caffe::CPU);
 #else
@@ -498,15 +613,14 @@ namespace dd
     
     // optimize
     this->_tjob_running = true;
-    caffe::Solver<float> *solver = nullptr;
+    boost::shared_ptr<caffe::Solver<float>> solver;
     try
       {
-	solver = caffe::SolverRegistry<float>::CreateSolver(solver_param);
+	solver.reset(caffe::SolverRegistry<float>::CreateSolver(solver_param));
       }
-    catch(std::exception &e)
+    catch(...)
       {
-	delete solver;
-	throw;
+	throw MLLibInternalException("solver creation exception");
       }
     if (!inputc._dv.empty() || !inputc._dv_sparse.empty())
       {
@@ -516,7 +630,6 @@ namespace dd
 	    {
 	      if (boost::dynamic_pointer_cast<caffe::MemoryDataLayer<float>>(solver->net()->layers()[0]) == 0)
 		{
-		  delete solver;
 		  throw MLLibBadParamException("solver's net's first layer is required to be of MemoryData type");
 		}
 	      boost::dynamic_pointer_cast<caffe::MemoryDataLayer<float>>(solver->net()->layers()[0])->AddDatumVector(inputc._dv);
@@ -525,7 +638,6 @@ namespace dd
 	    {
 	      if (boost::dynamic_pointer_cast<caffe::MemorySparseDataLayer<float>>(solver->net()->layers()[0]) == 0)
 		{
-		  delete solver;
 		  throw MLLibBadParamException("solver's net's first layer is required to be of MemorySparseData type");
 		}
 	      boost::dynamic_pointer_cast<caffe::MemorySparseDataLayer<float>>(solver->net()->layers()[0])->AddDatumVector(inputc._dv_sparse);
@@ -533,7 +645,6 @@ namespace dd
 	}
 	catch(std::exception &e)
 	  {
-	    delete solver;
 	    throw;
 	  }
 	inputc._dv.clear();
@@ -547,7 +658,6 @@ namespace dd
       {
 	if (this->_mlmodel._sstate.empty())
 	  {
-	    delete solver;
 	    LOG(ERROR) << "resuming a model requires a .solverstate file in model repository\n";
 	    throw MLLibBadParamException("resuming a model requires a .solverstate file in model repository");
 	  }
@@ -560,7 +670,6 @@ namespace dd
 	    catch(std::exception &e)
 	      {
 		LOG(ERROR) << "Failed restoring network state\n";
-		delete solver;
 		throw;
 	      }
 	  }
@@ -573,7 +682,6 @@ namespace dd
 	  }
 	catch(std::exception &e)
 	  {
-	    delete solver;
 	    throw;
 	  }
       }
@@ -582,7 +690,16 @@ namespace dd
 	solver->iter_ = 0;
 	solver->current_step_ = 0;
       }
-	
+    
+    if (_gpuid.size() > 1)
+      {
+	_sync = new caffe::P2PSync<float>(solver,nullptr,solver->param());
+	_syncs = std::vector<boost::shared_ptr<caffe::P2PSync<float>>>(_gpuid.size());
+	_sync->Prepare(_gpuid, &_syncs); 
+	for (size_t i=1;i<_syncs.size();++i)
+	  _syncs[i]->StartInternalThread();
+      }
+
     const int start_iter = solver->iter_;
     int average_loss = solver->param_.average_loss();
     std::vector<float> losses;
@@ -630,19 +747,31 @@ namespace dd
 	  }
 	
 	float loss = 0.0;
+	float avg_fb_time = 0.0;
 	try
 	  {
 	    for (size_t i = 0; i < solver->callbacks().size(); ++i) {
 	      solver->callbacks()[i]->on_start();
 	    }
 	    for (int i = 0; i < solver->param_.iter_size(); ++i)
-	      loss += solver->net_->ForwardBackward();
+	      {
+		std::chrono::time_point<std::chrono::system_clock> tstart = std::chrono::system_clock::now();
+		loss += solver->net_->ForwardBackward();
+		std::chrono::time_point<std::chrono::system_clock> tstop = std::chrono::system_clock::now();
+		avg_fb_time += std::chrono::duration_cast<std::chrono::milliseconds>(tstop-tstart).count();
+	      }
 	    loss /= solver->param_.iter_size();
+	    avg_fb_time /= solver->param_.iter_size();
 	  }
 	catch(std::exception &e)
 	  {
 	    LOG(ERROR) << "exception while forward/backward pass through the network\n";
-	    delete solver;
+	    if (_sync)
+	      {
+		for (size_t i=1;i<_syncs.size();++i)
+		  _syncs[i]->StopInternalThread();
+	      }
+	    delete _sync;
 	    throw;
 	  }
 	if (static_cast<int>(losses.size()) < average_loss) 
@@ -658,6 +787,7 @@ namespace dd
 	    losses[idx] = loss;
 	  }
 	this->add_meas("train_loss",smoothed_loss);
+	this->add_meas("iter_time",avg_fb_time);
 
 	if (solver->param_.test_interval() && solver->iter_ % solver->param_.test_interval() == 0)
 	  {
@@ -674,20 +804,31 @@ namespace dd
 	catch (std::exception &e)
 	  {
 	    LOG(ERROR) << "exception while updating network\n";
-	    delete solver;
+	    if (_sync)
+	      {
+		for (size_t i=1;i<_syncs.size();++i)
+		  _syncs[i]->StopInternalThread();
+	      }
+	    delete _sync;
 	    throw;
 	  }
       }
-    
+
     // always save final snapshot.
     if (solver->param_.snapshot_after_train())
       solver->Snapshot();
-    
+
     // destroy the net
     delete _net;
     _net = nullptr;
-    delete solver;
-    
+
+    if (_sync)
+      {
+	for (size_t i=1;i<_syncs.size();++i)
+	  _syncs[i]->StopInternalThread();
+	delete _sync;
+      }
+
     // bail on forced stop, i.e. not testing the net further.
     if (!this->_tjob_running.load())
       {
@@ -731,7 +872,7 @@ namespace dd
 	    out.add("parameters",adparams);
 	  }
       }
-    
+
     return 0;
   }
 
@@ -911,12 +1052,22 @@ namespace dd
     bool bbox = false;
     double confidence_threshold = 0.0;
     if (ad_output.has("confidence_threshold"))
-      confidence_threshold = ad_output.get("confidence_threshold").get<double>();
+      {
+	try
+	  {
+	    confidence_threshold = ad_output.get("confidence_threshold").get<double>();
+	  }
+	catch(std::exception &e)
+	  {
+	    // try from int
+	    confidence_threshold = static_cast<double>(ad_output.get("confidence_threshold").get<int>());
+	  }
+      }
     if (ad_output.has("bbox") && ad_output.get("bbox").get<bool>())
       bbox = true;
     
     // gpu
-#ifndef CPU_ONLY
+#if !defined(CPU_ONLY) && !defined(USE_CAFFE_CPU_ONLY)
     bool gpu = _gpu;
     if (ad_mllib.has("gpu"))
       {
@@ -940,11 +1091,12 @@ namespace dd
 #else
     Caffe::set_mode(Caffe::CPU);
 #endif
-    
+
+    APIData cad = ad;
+    bool has_mean_file = this->_mlmodel._has_mean_file;
+    cad.add("has_mean_file",has_mean_file);
     if (ad_output.has("measure"))
       {
-	APIData cad = ad;
-	cad.add("has_mean_file",this->_mlmodel._has_mean_file);
 	try
 	  {
 	    inputc.transform(cad);
@@ -975,9 +1127,6 @@ namespace dd
     if (ad_mllib.has("extract_layer"))
       extract_layer = ad_mllib.get("extract_layer").get<std::string>();
       
-    APIData cad = ad;
-    bool has_mean_file = this->_mlmodel._has_mean_file;
-    cad.add("has_mean_file",has_mean_file);
     try
       {
 	inputc.transform(cad);
@@ -1052,16 +1201,16 @@ namespace dd
 	      }
 	    catch(std::exception &e)
 	      {
-		LOG(ERROR) << "Error while proceeding with prediction forward pass, not enough memory?";
+		LOG(ERROR) << "Error while proceeding with supervised prediction forward pass, not enough memory? " << e.what();
 		delete _net;
 		_net = nullptr;
 		throw;
 	      }
 	    if (bbox) // in-image object detection
 	      {
+		int results_height = results[0]->height();
 		const int det_size = 7;
 		const float *outr = results[0]->cpu_data();
-		const int num_det = results[0]->height() / batch_size; // total number of detections across batch
 		for (int j=0;j<batch_size;j++)
 		  {
 		    int k = 0;
@@ -1075,20 +1224,31 @@ namespace dd
 		    int cols = 1;
 		    if (bit != inputc._imgs_size.end())
 		      {
+			// original image size
 			rows = (*bit).second.first;
 			cols = (*bit).second.second;
 		      }
+		    else
+		      {
+			LOG(ERROR) << "couldn't find original image size for " << uri;
+		      }
 		    bool leave = false;
-		    while(k<num_det)
+		    int curi = -1;
+		    while(true && k<results_height)
 		      {
 			if (outr[0] == -1)
 			  {
 			    // skipping invalid detection
+			    LOG(ERROR) << "skipping invalid detection";
 			    outr += det_size;
 			    leave = true;
 			    break;
 			  }
 			std::vector<float> detection(outr, outr + det_size);
+			if (curi == -1)
+			  curi = detection[0]; // first pass
+			else if (curi != detection[0])
+			  break; // this belongs to next image
 			++k;
 			outr += det_size;
 			if (detection[2] < confidence_threshold)
@@ -1156,7 +1316,17 @@ namespace dd
 	    if ((lit=n_layer_names_index.find(extract_layer))==n_layer_names_index.end())
 	      throw MLLibBadParamException("unknown extract layer " + extract_layer);
 	    int li = (*lit).second;
-	    loss = _net->ForwardFromTo(0,li);
+	    try
+	      {
+		loss = _net->ForwardFromTo(0,li);
+	      }
+	    catch(std::exception &e)
+	      {
+		LOG(ERROR) << "Error while proceeding with unsupervised prediction forward pass, not enough memory? " << e.what();
+		delete _net;
+		_net = nullptr;
+		throw;
+	      }
 	    const std::vector<std::vector<Blob<float>*>>& rresults = _net->top_vecs();
 	    std::vector<Blob<float>*> results = rresults.at(li);
 	    int slot = 0;
@@ -1231,7 +1401,7 @@ namespace dd
     // fix source paths in the model.
     caffe::NetParameter *np = sp.mutable_net_param();
     caffe::ReadProtoFromTextFile(sp.net().c_str(),np); //TODO: error on read + use internal caffe ReadOrDie procedure
-    for (int i=0;i<np->layer_size();i++)
+    for (int i=0;i<2;i++)//np->layer_size();i++)
       {
 	caffe::LayerParameter *lp = np->mutable_layer(i);
 	if (lp->has_data_param())
@@ -1268,18 +1438,30 @@ namespace dd
 		else mdp->set_batch_size(test_batch_size);
 	      }
 	  }
-	if (lp->has_transform_param() || inputc._has_mean_file)
+	if (lp->has_transform_param() || inputc._has_mean_file || !inputc._mean_values.empty())
 	  {
 	    caffe::TransformationParameter *tp = lp->mutable_transform_param();
 	    has_mean_file = tp->has_mean_file();
 	    if (tp->has_mean_file())
 	      {
-		if (ad.has("db"))
-		  tp->set_mean_file(ad.getobj("db").get("meanfile").get<std::string>());
-		else tp->set_mean_file(this->_mlmodel._repo + "/" + tp->mean_file());
+		if (tp->crop_size() == 0)
+		  {
+		    if (ad.has("db"))
+		      tp->set_mean_file(ad.getobj("db").get("meanfile").get<std::string>());
+		    else tp->set_mean_file(this->_mlmodel._repo + "/" + tp->mean_file());
+		  }
+		else
+		  {
+		    for (size_t d=0;d<inputc._mean_values.size();d++)
+		      {
+			tp->add_mean_value(inputc._mean_values.at(d));
+		      }
+		    tp->clear_mean_file();
+		  }
 	      }
 	  }
       }
+    //caffe::WriteProtoToTextFile(*np,sp.net().c_str());
     sp.clear_net();
   }
 
@@ -1292,6 +1474,10 @@ namespace dd
   {
     caffe::NetParameter net_param;
     caffe::ReadProtoFromTextFile(net_file,&net_param); //TODO: catch parsing error (returns bool true on success)
+    int width = inputc.width();
+    int height = inputc.height();
+    if (_crop_size > 0)
+      width = height = _crop_size;
     if (net_param.mutable_layer(0)->has_memory_data_param()
 	|| net_param.mutable_layer(1)->has_memory_data_param())
       {
@@ -1300,14 +1486,14 @@ namespace dd
 	    if (net_param.mutable_layer(0)->has_memory_data_param())
 	      {
 		net_param.mutable_layer(0)->mutable_memory_data_param()->set_channels(inputc.channels());
-		net_param.mutable_layer(0)->mutable_memory_data_param()->set_width(inputc.width());
-		net_param.mutable_layer(0)->mutable_memory_data_param()->set_height(inputc.height());
+		net_param.mutable_layer(0)->mutable_memory_data_param()->set_width(width);
+		net_param.mutable_layer(0)->mutable_memory_data_param()->set_height(height);
 	      }
 	    if (net_param.mutable_layer(1)->has_memory_data_param())
 	      {
 		net_param.mutable_layer(1)->mutable_memory_data_param()->set_channels(inputc.channels()); // test layer
-		net_param.mutable_layer(1)->mutable_memory_data_param()->set_width(inputc.width());
-		net_param.mutable_layer(1)->mutable_memory_data_param()->set_height(inputc.height());
+		net_param.mutable_layer(1)->mutable_memory_data_param()->set_width(width);
+		net_param.mutable_layer(1)->mutable_memory_data_param()->set_height(height);
 	      }
 	  }
 	else
@@ -1379,14 +1565,20 @@ namespace dd
 	if (_ntargets == 0 || _ntargets == 1)
 	  {
 	    deploy_net_param.mutable_layer(0)->mutable_memory_data_param()->set_channels(inputc.channels());
-	    deploy_net_param.mutable_layer(0)->mutable_memory_data_param()->set_width(inputc.width());
-	    deploy_net_param.mutable_layer(0)->mutable_memory_data_param()->set_height(inputc.height());
+	    deploy_net_param.mutable_layer(0)->mutable_memory_data_param()->set_width(width);
+	    deploy_net_param.mutable_layer(0)->mutable_memory_data_param()->set_height(height);
 	  }
 	else
 	  {
 	    deploy_net_param.mutable_layer(0)->mutable_memory_data_param()->set_channels(inputc.channels()+_ntargets);
 	    deploy_net_param.mutable_layer(1)->mutable_slice_param()->set_slice_point(0,inputc.channels());
 	  }
+	if (_crop_size > 0)
+	   {
+	     for (size_t d=0;d<inputc._mean_values.size();d++)
+	       deploy_net_param.mutable_layer(0)->mutable_transform_param()->add_mean_value(inputc._mean_values.at(d));
+	     deploy_net_param.mutable_layer(0)->mutable_transform_param()->set_crop_size(_crop_size);
+	   }
       }
     caffe::WriteProtoToTextFile(net_param,net_file);
     caffe::WriteProtoToTextFile(deploy_net_param,deploy_file);

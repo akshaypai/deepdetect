@@ -355,7 +355,16 @@ TEST(caffeapi,service_predict)
   ASSERT_TRUE(!jd.HasParseError());
   ASSERT_EQ(200,jd["status"]["code"]);
   ASSERT_TRUE(jd["body"]["measure"]["f1"].GetDouble() > 0.0);
-  
+
+  jpredictstr = "{\"service\":\""+ sname + "\",\"parameters\":{\"input\":{\"bw\":true,\"width\":28,\"height\":28},\"output\":{},\"mllib\":{\"net\":{\"test_batch_size\":100}}},\"data\":[\"" + mnist_repo + "/test.lmdb\"]}";
+  joutstr = japi.jrender(japi.service_predict(jpredictstr));
+  std::cout << "joutstr=" << joutstr << std::endl;
+  jd.Parse(joutstr.c_str());
+  ASSERT_TRUE(!jd.HasParseError());
+  ASSERT_EQ(200,jd["status"]["code"]);
+  uri = jd["body"]["predictions"][0]["uri"].GetString();
+  ASSERT_EQ(uri,"00000000");
+
   // remove service
   jstr = "{\"clear\":\"lib\"}";
   joutstr = japi.jrender(japi.service_delete(sname,jstr));
@@ -822,7 +831,7 @@ TEST(caffeapi,service_train_images_resnet)
   std::string plank_repo_loc = "plank";
   mkdir(plank_repo_loc.c_str(),0777);
   std::string sname = "my_service";
-  std::string jstr = "{\"mllib\":\"caffe\",\"description\":\"my classifier\",\"type\":\"supervised\",\"model\":{\"repository\":\"" +  plank_repo_loc + "\",\"templates\":\"" + model_templates_repo  + "\"},\"parameters\":{\"input\":{\"connector\":\"image\"},\"mllib\":{\"db\":true,\"template\":\"resnet\",\"layers\":[\"Res10\"],\"nclasses\":121}}}";
+  std::string jstr = "{\"mllib\":\"caffe\",\"description\":\"my classifier\",\"type\":\"supervised\",\"model\":{\"repository\":\"" +  plank_repo_loc + "\",\"templates\":\"" + model_templates_repo  + "\"},\"parameters\":{\"input\":{\"connector\":\"image\",\"width\":32,\"height\":32},\"mllib\":{\"db\":true,\"template\":\"resnet\",\"layers\":[\"Res10\"],\"nclasses\":121}}}";
   std::string joutstr = japi.jrender(japi.service_create(sname,jstr));
   ASSERT_EQ(created_str,joutstr);
 
