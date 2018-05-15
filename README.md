@@ -1,6 +1,6 @@
 ## DeepDetect : Open Source Deep Learning Server & API
 
-[![Join the chat at https://gitter.im/beniz/deepdetect](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/beniz/deepdetect?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
+[![Join the chat at https://gitter.im/beniz/deepdetect](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/beniz/deepdetect?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge) [![Build Status](https://travis-ci.org/beniz/deepdetect.png)](https://travis-ci.org/beniz/deepdetect)
 
 DeepDetect (http://www.deepdetect.com/) is a machine learning API and server written in C++11. It makes state of the art machine learning easy to work with and integrate into existing applications.
 
@@ -13,12 +13,12 @@ DeepDetect relies on external machine learning libraries through a very generic 
 
 #### Machine Learning functionalities per library (current):
 
-|            | Training | Prediction | Classification | Object Detection | Regression | Autoencoder |
-|------------|----------|------------|----------------|-----------|------------|-------------|
-| Caffe      | Y        | Y          | Y              | Y         |   Y        | Y           |
-| XGBoost    | Y        | Y          | Y              | N         |   Y        | N/A         |
-| Tensorflow | N        | Y          | Y              | N         |   N        | N           |
-| T-SNE      | Y        | N/A        | N/A            | N/A       |   N/A      | N/A         |
+|            | Training | Prediction | Classification | Object Detection | Segmentation | Regression | Autoencoder |
+|------------|----------|------------|----------------|-----------|-----------|------------|-------------|
+| Caffe      | Y        | Y          | Y              | Y         |   Y       |   Y        | Y           |
+| XGBoost    | Y        | Y          | Y              | N         |   N       |   Y        | N/A         |
+| Tensorflow | N        | Y          | Y              | N         |   N       |   N        | N           |
+| T-SNE      | Y        | N/A        | N/A            | N/A       |   N/A     |   N/A      | N/A         |
 
 
 #### GPU support per library
@@ -42,7 +42,7 @@ DeepDetect relies on external machine learning libraries through a very generic 
 
 #### Main functionalities
 
-DeepDetect implements support for supervised and unsupervised deep learning of images, text and other data, with focus on simplicity and ease of use, test and connection into existing applications. It supports classification, object detection, regression, autoencoders, ...
+DeepDetect implements support for supervised and unsupervised deep learning of images, text and other data, with focus on simplicity and ease of use, test and connection into existing applications. It supports classification, object detection, segmentation, regression, autoencoders, ...
 
 #### Support
 
@@ -58,6 +58,10 @@ Supported images that come with pre-trained image classification deep (residual)
 
 - For **Amazon AMI** see official builds documentation at https://deepdetect.com/products/ami/, and direct links to [GPU AMI](https://aws.amazon.com/marketplace/pp/B01N4D483M) and [CPU AMI](https://aws.amazon.com/marketplace/pp/B01N1RGWQZ).
 
+#### Performances
+
+See https://github.com/jolibrain/dd_performances for a report on performances on NVidia Desktop and embedded GPUs, along with Raspberry Pi 3.
+
 #### Quickstart
 Setup an image classifier API service in a few minutes:
 http://www.deepdetect.com/tutorials/imagenet-classifier/
@@ -69,12 +73,13 @@ List of tutorials, training from text, data and images, setup of prediction serv
 Current features include:
 
 - high-level API for machine learning and deep learning
-- Support for Caffe, Tensorflow, XGBoost and T-SNE
-- classification, regression, autoencoders, object detection
+- support for Caffe, Tensorflow, XGBoost and T-SNE
+- classification, regression, autoencoders, object detection, segmentation
 - JSON communication format
 - remote Python client library
 - dedicated server with support for asynchronous training calls
 - high performances, benefit from multicore CPU and GPU
+- built-in similarity search via neural embeddings
 - connector to handle large collections of images with on-the-fly data augmentation (e.g. rotations, mirroring)
 - connector to handle CSV files with preprocessing capabilities
 - connector to handle text files, sentences, and character-based models
@@ -84,6 +89,7 @@ Current features include:
 - flexible template output format to simplify connection to external applications
 - templates for the most useful neural architectures (e.g. Googlenet, Alexnet, ResNet, convnet, character-based convnet, mlp, logistic regression)
 - support for sparse features and computations on both GPU and CPU
+- built-in similarity indexing and search of predicted features and probability distributions
 
 ##### Documentation
 
@@ -98,6 +104,10 @@ Current features include:
   - 'a la scikit' bindings: https://github.com/ArdalanM/pyDD
 - Java client: https://github.com/kfadhel/deepdetect-api-java
 - Early C# client: https://github.com/beniz/deepdetect/pull/98
+
+##### Tools
+
+- Log DeepDetect training metrics via Tensorboard with [dd_board](https://github.com/jolibrain/dd_board)
 
 ##### Dependencies
 
@@ -115,7 +125,7 @@ Current features include:
 
 ##### Caffe Dependencies
 
-- CUDA 8 or 7.5 is recommended for GPU mode.
+- CUDA 9 or 8 is recommended for GPU mode.
 - BLAS via ATLAS, MKL, or OpenBLAS.
 - [protobuf](https://github.com/google/protobuf)
 - IO libraries hdf5, leveldb, snappy, lmdb
@@ -123,17 +133,17 @@ Current features include:
 ##### XGBoost Dependencies
 
 None outside of C++ compiler and make
-- CUDA 8 or 7.5 is recommended for GPU mode.
+- CUDA 8 is recommended for GPU mode.
 
 #### Tensorflow Dependencies
 
 - Cmake > 3
-- [Bazel](https://www.bazel.io/versions/master/docs/install.html#install-on-ubuntu)
+- [Bazel 0.8.x](https://www.bazel.io/versions/master/docs/install.html#install-on-ubuntu)
 
 ##### Caffe version
 
 By default DeepDetect automatically relies on a modified version of Caffe, https://github.com/beniz/caffe/tree/master
-This version includes many improvements over the original Caffe, such as sparse input data support, exception handling, class weights, object detection, and various additional losses and layers.
+This version includes many improvements over the original Caffe, such as sparse input data support, exception handling, class weights, object detection, segmentation, and various additional losses and layers.
 
 ##### Implementation
 
@@ -149,6 +159,9 @@ Python script for indexing and searching images is in [demo/imgsearch](https://g
 
 - Image object detection:
 Python script for object detection within images is in [demo/objdetect](https://github.com/beniz/deepdetect/tree/master/demo/objdetect)
+
+- Image segmentation:
+Python script for image segmentation is in [demo/segmentation](https://github.com/beniz/deepdetect/tree/master/demo/segmentation)
 
 ##### Examples
 
@@ -170,7 +183,7 @@ http://www.deepdetect.com/overview/examples/
 | ResNet 152               | [Y](https://deepdetect.com/models/resnet/ResNet-152-model.caffemodel)     | [Y](https://deepdetect.com/models/tf/resnet_v1_152/resnet_v1_152.pb)         | MSR           |               77%            |
 | Inception-ResNet-v2      | N     | [Y](https://deepdetect.com/models/tf/inception_resnet_v2.pb)          | Google        |       79.79%                    |
 | VGG-16                   | [Y](https://deepdetect.com/models/vgg_16/VGG_ILSVRC_16_layers.caffemodel)     | [Y](https://deepdetect.com/models/tf/vgg_16/vgg_16.pb)          | Oxford        |               70.5%            |
-| VGG-19                   | [Y](https://deepdetect.com/models/vgg_16/VGG_ILSVRC_16_layers.caffemodel)     | [Y](https://deepdetect.com/models/tf/vgg_19/vgg_19.pb)          | Oxford        |               71.3%            |
+| VGG-19                   | [Y](https://deepdetect.com/models/vgg_19/VGG_ILSVRC_19_layers.caffemodel)     | [Y](https://deepdetect.com/models/tf/vgg_19/vgg_19.pb)          | Oxford        |               71.3%            |
 | ResNext 50                | [Y](https://deepdetect.com/models/resnext/resnext_50)     | N          | https://github.com/terrychenism/ResNeXt           |      76.9%                     |
 | ResNext 101                | [Y](https://deepdetect.com/models/resnext/resnext_101)     | N          | https://github.com/terrychenism/ResNeXt           |      77.9%                     |
 | ResNext 152               | [Y](https://deepdetect.com/models/resnext/resnext_152)     | N          | https://github.com/terrychenism/ResNeXt           |      78.7%                     |
@@ -178,7 +191,16 @@ http://www.deepdetect.com/overview/examples/
 | DenseNet-161                   | [Y](https://deepdetect.com/models/densenet/densenet_161_48/)     | N          | https://github.com/shicai/DenseNet-Caffe        |               77.6%            |
 | DenseNet-169                   | [Y](https://deepdetect.com/models/densenet/densenet_169_32/)     | N          | https://github.com/shicai/DenseNet-Caffe        |               76.1%            |
 | DenseNet-201                   | [Y](https://deepdetect.com/models/densenet/densenet_201_32/)     | N          | https://github.com/shicai/DenseNet-Caffe        |               77.3%            |
+| SE-BN-Inception                   | [Y](https://deepdetect.com/models/senets/se_bn_inception/)     | N          | https://github.com/hujie-frank/SENet        |               76.38%            |
+| SE-ResNet-50                   | [Y](https://deepdetect.com/models/senets/se_resnet_50/)     | N          | https://github.com/hujie-frank/SENet        |               77.63%            |
+| SE-ResNet-101                   | [Y](https://deepdetect.com/models/senets/se_resnet_101/)     | N          | https://github.com/hujie-frank/SENet        |               78.25%            |
+| SE-ResNet-152                   | [Y](https://deepdetect.com/models/senets/se_resnet_152/)     | N          | https://github.com/hujie-frank/SENet        |               78.66%            |
+| SE-ResNext-50                   | [Y](https://deepdetect.com/models/senets/se_resnext_50/)     | N          | https://github.com/hujie-frank/SENet        |               79.03%            |
+| SE-ResNext-101                   | [Y](https://deepdetect.com/models/senets/se_resnext_101/)     | N          | https://github.com/hujie-frank/SENet        |               80.19%            |
+| SENet                   | [Y](https://deepdetect.com/models/senets/se_net/)     | N          | https://github.com/hujie-frank/SENet        |               81.32%            |
 | VOC0712 (object detection) | [Y](https://deepdetect.com/models/voc0712_dd.tar.gz) | N | https://github.com/weiliu89/caffe/tree/ssd | 71.2 mAP |
+| InceptionBN-21k | [Y](https://deepdetect.com/models/inception/inception_bn_21k) | N | https://github.com/pertusa/InceptionBN-21K-for-Caffe | 41.9% |
+| Inception v3 5K | N | [Y](https://deepdetect.com/models/tf/openimages_inception_v3) | https://github.com/openimages/dataset |  |
 
 More models:
 
@@ -207,7 +229,7 @@ Below are instructions for Ubuntu 14.04 LTS. For other Linux and Unix systems, s
 
 Beware of dependencies, typically on Debian/Ubuntu Linux, do:
 ```
-sudo apt-get install build-essential libgoogle-glog-dev libgflags-dev libeigen3-dev libopencv-dev libcppnetlib-dev libboost-dev libboost-iostreams-dev libcurlpp-dev libcurl4-openssl-dev protobuf-compiler libopenblas-dev libhdf5-dev libprotobuf-dev libleveldb-dev libsnappy-dev liblmdb-dev libutfcpp-dev cmake libgoogle-perftools-dev unzip
+sudo apt-get install build-essential libgoogle-glog-dev libgflags-dev libeigen3-dev libopencv-dev libcppnetlib-dev libboost-dev libboost-iostreams-dev libcurlpp-dev libcurl4-openssl-dev protobuf-compiler libopenblas-dev libhdf5-dev libprotobuf-dev libleveldb-dev libsnappy-dev liblmdb-dev libutfcpp-dev cmake libgoogle-perftools-dev unzip python-setuptools python-dev libspdlog-dev
 ```
 
 #### Default build with Caffe
@@ -234,6 +256,12 @@ To target the build of underlying Caffe to a specific CUDA architecture (e.g. Pa
 cmake .. -DCUDA_ARCH="-gencode arch=compute_61,code=sm_61"
 ```
 
+If you would like to build on NVidia Jetson TX1:
+```
+cmake .. -DCUDA_ARCH="-gencode arch=compute_53,code=sm_53" -DUSE_CUDNN=ON -DJETSON=ON -DCUDA_USE_STATIC_CUDA_RUNTIME=OFF
+```
+On Jetson TX2, use `-DCUDA_ARCH="-gencode arch=compute_62,code=sm_62"`
+
 If you would like a CPU only build, use:
 ```
 cmake .. -DUSE_CPU_ONLY=ON
@@ -256,7 +284,6 @@ If you would like to build the GPU support for XGBoost (experimental from DMLC),
 cmake .. -DUSE_XGBOOST=ON -DUSE_XGBOOST_GPU=ON
 ```
 
-
 #### Build with Tensorflow support
 First you must install [Bazel](https://www.bazel.io/versions/master/docs/install.html#install-on-ubuntu) and Cmake with version > 3.
 
@@ -267,7 +294,7 @@ sudo apt-get install python-numpy swig python-dev python-wheel unzip
 
 If you would like to build with Tensorflow, include the `-DUSE_TF=ON` paramter to `cmake`:
 ```
-cmake .. -DUSE_TF=ON
+cmake .. -DUSE_TF=ON -DCUDA_USE_STATIC_CUDA_RUNTIME=OFF
 ```
 
 If you would like to constrain Tensorflow to CPU, use:
@@ -285,6 +312,20 @@ cmake .. -DUSE_TF=ON -DUSE_XGBOOST=ON
 Simply specify the option via cmake command line:
 ```
 cmake .. -DUSE_TSNE=ON
+```
+
+#### Build with similarity search support
+
+Specify the following option via cmake:
+```
+cmake .. -DUSE_SIMSEARCH=ON
+```
+
+#### Build with logs output into syslog
+
+Specify the following option via cmake:
+```
+cmake .. -DUSE_DD_SYSLOG=ON
 ```
 
 ### Run tests

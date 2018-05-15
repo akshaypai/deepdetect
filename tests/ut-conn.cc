@@ -30,6 +30,43 @@
 
 using namespace dd;
 
+TEST(outputconn,mlsoft)
+{
+  std::vector<double> targets = {0.1, 0.6, 0.0, 0.9};
+  std::vector<double> preds = {0.0, 0.5, 0.1, 0.9};
+  APIData res_ad;
+  res_ad.add("batch_size",2);
+  for (size_t i=0;i<2;i++)
+    {
+      APIData bad;
+      bad.add("pred",preds);
+      bad.add("target",targets);
+      std::vector<APIData> vad = {bad};
+      res_ad.add(std::to_string(i),vad);
+    }
+  SupervisedOutput so;
+  std::vector<std::string> measures = {"acc"};
+  double kl = so.multilabel_soft_kl(res_ad);
+  double js = so.multilabel_soft_js(res_ad);
+  double was = so.multilabel_soft_was(res_ad);
+  double ks = so.multilabel_soft_ks(res_ad);
+  double dc = so.multilabel_soft_dc(res_ad);
+  double r2 = so.multilabel_soft_r2(res_ad);;
+  std::vector<double> delta_scores {0,0,0,0};
+  std::vector<double> deltas {0.05, 0.1, 0.2, 0.5};
+  so.multilabel_soft_deltas(res_ad,delta_scores, deltas);
+  ASSERT_NEAR(0.257584,kl, 0.0001); // val checked with def
+  ASSERT_NEAR(0.0178739,js, 0.0001);
+  ASSERT_NEAR(0.0866025,was, 0.0001);
+  ASSERT_EQ(0.1,ks);
+  ASSERT_NEAR(0.987,dc,0.001);
+  ASSERT_NEAR(0.94444,r2,0.0001);
+  ASSERT_EQ(0.25,delta_scores[0]);
+  ASSERT_EQ(0.5,delta_scores[1]);
+  ASSERT_EQ(1,delta_scores[2]);
+  ASSERT_EQ(1,delta_scores[3]);
+}
+
 TEST(outputconn,acc)
 {
   std::vector<double> targets = {0, 0, 1, 1};
@@ -52,6 +89,39 @@ TEST(outputconn,acc)
   std::vector<std::string> measures = {"acc"};
   std::map<std::string,double> accs = so.acc(res_ad,measures);
   ASSERT_EQ(0.75,accs["acc"]);
+}
+
+TEST(outputconn,acc_v)
+{
+  APIData res_ad;
+  res_ad.add("batch_size",static_cast<int>(2));
+  res_ad.add("nclasses",static_cast<int>(2));
+
+  APIData bad;
+  std::vector<double> targets = {0.0, 1.0 };
+  std::vector<double> pred1 = {0.0, 1.0};
+  bad.add("pred",pred1);
+  bad.add("target",targets);
+  std::vector<APIData> vad = {bad};
+  res_ad.add(std::to_string(0),vad);
+
+
+  APIData bad2;
+  std::vector<double> targets2 = {0.0, 0.0};
+  std::vector<double> pred2 = {0.0, 1.0};
+  bad2.add("pred",pred2);
+  bad2.add("target",targets2);
+  std::vector<APIData> vad2 = {bad2};
+  res_ad.add(std::to_string(1),vad2);
+
+
+
+  SupervisedOutput so;
+  double meanacc = 0.0, meaniou = 0.0;
+  std::vector<double> clacc;
+  double acc = so.acc_v(res_ad,meanacc,meaniou,clacc);
+  ASSERT_EQ(0.75,acc);
+  ASSERT_EQ(0.875,meaniou);
 }
 
 TEST(outputconn,acck)
@@ -180,9 +250,9 @@ TEST(outputconn,cmfull)
   SupervisedOutput::measure(res_ad,ad_out,out);
   APIData meas_out = out.getobj("measure");
   auto lkeys = meas_out.list_keys();
-  /*std::cerr << "lkeys size=" << lkeys.size() << std::endl;
-  for (auto k: lkeys)
-  std::cerr << k << std::endl;*/
+  ///std::cerr << "lkeys size=" << lkeys.size() << std::endl;
+  //for (auto k: lkeys)
+  //std::cerr << k << std::endl;
   ASSERT_EQ(0.5,meas_out.get("accp").get<double>());
   
   // cmfull
@@ -192,7 +262,7 @@ TEST(outputconn,cmfull)
   out.toJVal(jpred,jout);
   std::string jstr = japi.jrender(jout);
   std::cerr << "jstr=" << jstr << std::endl;
-  ASSERT_EQ("{\"measure\":{\"labels\":[\"zero\",\"one\",\"two\",\"three\"],\"f1\":0.35294117352941187,\"cmfull\":[{\"zero\":[0.5,0.5,0.0,0.0]},{\"one\":[0.0,1.0,0.0,0.0]},{\"two\":[0.0,1.0,0.0,0.0]},{\"three\":[2.696539702293474e308,2.696539702293474e308,2.696539702293474e308,2.696539702293474e308]}],\"cmdiag\":[0.4999999975,0.9999999900000002,0.0,0.0],\"recall\":0.3333333305555556,\"precision\":0.3749999968750001,\"accp\":0.5}}",jstr);
+  ASSERT_EQ("{\"measure\":{\"cmfull\":[{\"zero\":[0.5,0.5,0.0,0.0]},{\"one\":[0.0,1.0,0.0,0.0]},{\"two\":[0.0,1.0,0.0,0.0]},{\"three\":[2.696539702293474e308,2.696539702293474e308,2.696539702293474e308,2.696539702293474e308]}],\"precision\":0.3749999968750001,\"labels\":[\"zero\",\"one\",\"two\",\"three\"],\"f1\":0.35294117352941187,\"accp\":0.5,\"recall\":0.3333333305555556,\"cmdiag\":[0.4999999975,0.9999999900000002,0.0,0.0]}}",jstr);
 }
 
 TEST(inputconn,img)

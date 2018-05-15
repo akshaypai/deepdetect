@@ -29,8 +29,10 @@ namespace dd
   {
   public:
     unsup_result(const std::string &uri,
-		 const std::vector<double> &vals)
-      :_uri(uri),_vals(vals) {}
+		 const std::vector<double> &vals,
+		 const APIData &extra=APIData())
+      :_uri(uri),_vals(vals),_extra(extra) {
+    }
 
     ~unsup_result() {}
 
@@ -54,10 +56,22 @@ namespace dd
       _vals.clear();
     }
 
+#ifdef USE_SIMSEARCH
+    void add_nn(const double dist, const std::string &uri)
+    {
+      _nns.insert(std::pair<double,std::string>(dist,uri));
+    }
+#endif
+    
     std::string _uri;
     std::vector<double> _vals;
     std::vector<bool> _bvals;
     std::string _str;
+#ifdef USE_SIMSEARCH
+    bool _indexed = false;
+    std::multimap<double,std::string> _nns; /**< nearest neigbors. */
+#endif
+    APIData _extra; /**< other metadata, e.g. image size.*/
   };
   
   /**
@@ -101,13 +115,23 @@ namespace dd
 	  if ((hit=_vres.find(uri))==_vres.end())
 	    {
 	      _vres.insert(std::pair<std::string,int>(uri,_vvres.size()));
-	      _vvres.push_back(unsup_result(uri,vals));
+	      if (ad.has("imgsize"))
+		{
+		  APIData ad_imgsize;
+		  ad_imgsize.add("imgsize",ad.getobj("imgsize"));
+		  _vvres.push_back(unsup_result(uri,vals,ad_imgsize));
+		}
+	      else _vvres.push_back(unsup_result(uri,vals));
 	    }
+	  
 	}
     }
 
-    void finalize(const APIData &ad_in, APIData &ad_out)
+    void finalize(const APIData &ad_in, APIData &ad_out, MLModel *mlm)
     {
+#ifndef USE_SIMSEARCH
+      (void)mlm;
+#endif
       if (ad_in.has("binarized"))
 	_binarized = ad_in.get("binarized").get<bool>();
       else if (ad_in.has("bool_binarized"))
@@ -135,11 +159,66 @@ namespace dd
 	      _vvres.at(i).string_binarized();
 	    }
 	}
-      to_ad(ad_out);
+
+      std::unordered_set<std::string> indexed_uris;
+#ifdef USE_SIMSEARCH
+      if (ad_in.has("index") && ad_in.get("index").get<bool>())
+	{
+	  // check whether index has been created
+	  if (!mlm->_se)
+	    {
+	      int index_dim = _vvres.at(0)._vals.size(); //XXX: lookup to the batch's first output, as they should all have the same size
+	      mlm->create_sim_search(index_dim);
+	    }
+	      
+	  // index output content -> vector (XXX: will need to flatten in case of multiple vectors)
+	  for (size_t i=0;i<_vvres.size();i++)
+	    {
+	      URIData urid(_vvres.at(i)._uri);
+	      mlm->_se->index(urid,_vvres.at(i)._vals);
+	      indexed_uris.insert(urid._uri);
+	    }
+	}
+      if (ad_in.has("build_index") && ad_in.get("build_index").get<bool>())
+	{
+	  if (mlm->_se)
+	    mlm->build_index();
+	  else throw SimIndexException("Cannot build index if not created");
+	}
+
+      if (ad_in.has("search") && ad_in.get("search").get<bool>())
+	{
+	  if (!mlm->_se)
+	    {
+	      int index_dim = _vvres.at(0)._vals.size(); //XXX: lookup to the batch's first output, as they should all have the same size
+	      mlm->create_sim_search(index_dim);
+	    }
+	  
+	  int search_nn = _search_nn;
+	  if (ad_in.has("search_nn"))
+	    search_nn = ad_in.get("search_nn").get<int>();
+	  for (size_t i=0;i<_vvres.size();i++)
+	    {
+	      std::vector<URIData> nn_uris;
+	      std::vector<double> nn_distances;
+	      mlm->_se->search(_vvres.at(i)._vals,search_nn,nn_uris,nn_distances);
+	      for (size_t j=0;j<nn_uris.size();j++)
+		{
+		  _vvres.at(i).add_nn(nn_distances.at(j),nn_uris.at(j)._uri);
+		}
+	    }
+	}
+#endif
+      
+      to_ad(ad_out,indexed_uris);
     }
 
-    void to_ad(APIData &out) const
+    void to_ad(APIData &out, const std::unordered_set<std::string> &indexed_uris) const
     {
+#ifndef USE_SIMSEARCH
+      (void)indexed_uris;
+#endif
+      std::unordered_set<std::string>::const_iterator hit;
       std::vector<APIData> vpred;
       for (size_t i=0;i<_vvres.size();i++)
 	{
@@ -150,8 +229,28 @@ namespace dd
 	  else if (_string_binarized)
 	    adpred.add("vals",_vvres.at(i)._str);
 	  else adpred.add("vals",_vvres.at(i)._vals);
+	  if (_vvres.at(i)._extra.has("imgsize"))
+	    adpred.add("imgsize",_vvres.at(i)._extra.getobj("imgsize"));
 	  if (i == _vvres.size()-1)
 	    adpred.add("last",true);
+#ifdef USE_SIMSEARCH
+	  if (!indexed_uris.empty() && (hit=indexed_uris.find(_vvres.at(i)._uri))!=indexed_uris.end())
+	    adpred.add("indexed",true);
+	  if (!_vvres.at(i)._nns.empty())
+	    {
+	      std::vector<APIData> ad_nns;
+	      auto mit = _vvres.at(i)._nns.begin();
+	      while(mit!=_vvres.at(i)._nns.end())
+		{
+		  APIData ad_nn;
+		  ad_nn.add("uri",(*mit).second);
+		  ad_nn.add("dist",(*mit).first);
+		  ad_nns.push_back(ad_nn);
+		  ++mit;
+		}
+	      adpred.add("nns",ad_nns);
+	    }
+#endif
 	  vpred.push_back(adpred);
 	}
       out.add("predictions",vpred);
@@ -162,6 +261,9 @@ namespace dd
     bool _binarized = false; /**< binary representation of output values. */
     bool _bool_binarized = false; /**< boolean binary representation of output values. */
     bool _string_binarized = false; /**< boolean string as binary representation of output values. */
+#ifdef USE_SIMSEARCH
+    int _search_nn = 10; /**< default nearest neighbors per search. */
+#endif
   };
 
 }

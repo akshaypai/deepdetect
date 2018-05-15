@@ -24,6 +24,7 @@
 
 #include "apidata.h"
 #include "utils/fileops.hpp"
+#include <spdlog/spdlog.h>
 #include <atomic>
 #include <exception>
 #include <mutex>
@@ -75,7 +76,7 @@ namespace dd
      * \brief copy-constructor
      */
     MLLib(MLLib &&mll) noexcept
-      :_inputc(mll._inputc),_outputc(mll._outputc),_mlmodel(mll._mlmodel),_meas(mll._meas),_tjob_running(mll._tjob_running.load())
+      :_inputc(mll._inputc),_outputc(mll._outputc),_mlmodel(mll._mlmodel),_meas(mll._meas),_tjob_running(mll._tjob_running.load()),_logger(mll._logger)
       {}
     
     /**
@@ -95,6 +96,16 @@ namespace dd
      */
     void clear_mllib(const APIData &ad);
 
+#ifdef USE_SIMSEARCH
+    /**
+     * \brief removes search index from model repository
+     */
+    void clear_index()
+    {
+      _mlmodel.remove_index();
+    }
+#endif
+    
     /**
      * \brief removes everything in model repository
      */
@@ -186,6 +197,21 @@ namespace dd
       else _meas.insert(std::pair<std::string,double>(meas,l));
     }
 
+    void add_meas(const std::string &meas, const std::vector<double> &vl)
+    {
+      std::lock_guard<std::mutex> lock(_meas_mutex);
+      int c = 0;
+      for (double l: vl)
+	{
+	  std::string measl = meas + '_' + std::to_string(c);
+	  auto hit = _meas.find(measl);
+	  if (hit!=_meas.end())
+	    (*hit).second = l;
+	  else _meas.insert(std::pair<std::string,double>(measl,l));
+	  ++c;
+	}
+    }
+    
     /**
      * \brief get currentvalue of argument measure
      * @param meas measure name
@@ -217,6 +243,25 @@ namespace dd
       ad.add("measure",meas);
     }
 
+    /**
+     * \brief render estimated remaining time
+     * @param ad data object to hold the estimate
+     */
+    void est_remain_time(APIData &out)
+    {
+      APIData meas = out.getobj("measure");
+      if (meas.has("remain_time")){    
+        int est_remain_time = static_cast<int>(meas.get("remain_time").get<double>());
+        int seconds = est_remain_time % 60;
+        int minutes = (est_remain_time / 60) % 60;
+        int hours = (est_remain_time / 60 / 60) % 24;
+        int days = est_remain_time / 60 / 60 / 24;
+        std::string est_remain_time_str = std::to_string(days) + "d:" + std::to_string(hours) + "h:" + std::to_string(minutes) + "m:" + std::to_string(seconds) + "s";
+        meas.add("remain_time_str",est_remain_time_str);
+        out.add("measure",meas);
+      }
+    }
+
     TInputConnectorStrategy _inputc; /**< input connector strategy for channeling data in. */
     TOutputConnectorStrategy _outputc; /**< output connector strategy for passing results back to API. */
 
@@ -234,6 +279,8 @@ namespace dd
     bool _online = false; /**< whether the algorithm is online, i.e. it interleaves training and prediction calls.
 			     When not, prediction calls are rejected while training is running. */
 
+    std::shared_ptr<spdlog::logger> _logger; /**< mllib logger. */
+    
   protected:
     std::mutex _meas_per_iter_mutex; /**< mutex over measures history. */
     std::mutex _meas_mutex; /** mutex around current measures. */

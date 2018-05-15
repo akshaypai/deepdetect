@@ -23,7 +23,6 @@
 #include "utils/fileops.hpp"
 #include "utils/utils.hpp"
 #include <boost/tokenizer.hpp>
-#include <glog/logging.h>
 #include <iostream>
 
 namespace dd
@@ -39,7 +38,7 @@ namespace dd
     std::ifstream txt_file(fname);
     if (!txt_file.is_open())
       {
-	LOG(ERROR) << "cannot open file=" << fname;
+	_logger->error("cannot open file={}",fname);
 	throw InputConnectorBadParamException("cannot open file " + fname);
       }
     std::stringstream buffer;
@@ -71,13 +70,33 @@ namespace dd
     std::unordered_set<std::string> subdirs;
     if (fileops::list_directory(dir,false,true,subdirs))
       throw InputConnectorBadParamException("failed reading text subdirectories in data directory " + dir);
-    LOG(INFO) << "txtinputfileconn: list subdirs size=" << subdirs.size();
+    _logger->info("txtinputfileconn: list subdirs size={}",subdirs.size());
     
     // list files and classes
+    bool test_dir = false;
     std::vector<std::pair<std::string,int>> lfiles; // labeled files
     std::unordered_map<int,std::string> hcorresp; // correspondence class number / class name
+    std::unordered_map<std::string,int> hcorresp_r; // reverse correspondence for test set.
     if (!subdirs.empty())
       {
+	++_ctfc->_dirs; // this is a directory containing classes info.
+	if (_ctfc->_dirs >= 2)
+	  {
+	    test_dir = true;
+	    std::ifstream correspf(_ctfc->_model_repo + "/" + _ctfc->_correspname,std::ios::binary);
+	    if (!correspf.is_open())
+	      {
+		std::string err_msg = "Failed opening corresp file before reading txt test data directory";;
+		_logger->error(err_msg);
+		throw InputConnectorInternalException(err_msg);
+	      }
+	    std::string line;
+	    while(std::getline(correspf,line))
+	      {
+		std::vector<std::string> vstr = dd_utils::split(line,' ');
+		hcorresp_r.insert(std::pair<std::string,int>(vstr.at(1),std::atoi(vstr.at(0).c_str())));
+	      }
+	  }
 	int cl = 0;
 	auto uit = subdirs.begin();
 	while(uit!=subdirs.end())
@@ -85,15 +104,34 @@ namespace dd
 	    std::unordered_set<std::string> subdir_files;
 	    if (fileops::list_directory((*uit),true,false,subdir_files))
 	      throw InputConnectorBadParamException("failed reading text data sub-directory " + (*uit));
-	    if (_ctfc->_train)
-	      hcorresp.insert(std::pair<int,std::string>(cl,dd_utils::split((*uit),'/').back()));
+	    std::string cls = dd_utils::split((*uit),'/').back();
+	    if (!test_dir)
+	      {
+		if (_ctfc->_train)
+		  {
+		    hcorresp.insert(std::pair<int,std::string>(cl,cls));
+		    hcorresp_r.insert(std::pair<std::string,int>(cls,cl));
+		  }
+	      }
+	    else
+	      {
+		std::unordered_map<std::string,int>::const_iterator hcit;
+		if ((hcit=hcorresp_r.find(cls))==hcorresp_r.end())
+		  {
+		    _logger->error("class {} appears in testing set but not in training set, skipping",cls);
+		    ++uit;
+		    continue;
+		  }
+		cl = (*hcit).second;
+	      }
 	    auto fit = subdir_files.begin();
 	    while(fit!=subdir_files.end()) // XXX: re-iterating the file is not optimal
 	      {
 		lfiles.push_back(std::pair<std::string,int>((*fit),cl));
 		++fit;
 	      }
-	    ++cl;
+	    if (!test_dir)
+	      ++cl;
 	    ++uit;
 	  }
       }
@@ -119,12 +157,12 @@ namespace dd
 	std::stringstream buffer;
 	buffer << txt_file.rdbuf();
 	std::string ct = buffer.str();
-	_ctfc->parse_content(ct,p.second);
+	_ctfc->parse_content(ct,p.second,test_dir);
       }
 
     // post-processing
     size_t initial_vocab_size = _ctfc->_vocab.size();
-    if (_ctfc->_train)
+    if (_ctfc->_train && !test_dir)
       {
 	auto vhit = _ctfc->_vocab.begin();
 	while(vhit!=_ctfc->_vocab.end())
@@ -134,7 +172,7 @@ namespace dd
 	    else ++vhit;
 	  }
       }
-    if (_ctfc->_train && initial_vocab_size != _ctfc->_vocab.size())
+    if (_ctfc->_train && !test_dir && initial_vocab_size != _ctfc->_vocab.size())
       {
 	// update pos
 	int pos = 0;
@@ -147,7 +185,7 @@ namespace dd
 	  }
       }
 
-    if (!_ctfc->_characters && (initial_vocab_size != _ctfc->_vocab.size() || _ctfc->_tfidf))
+    if (!_ctfc->_characters && !test_dir && (initial_vocab_size != _ctfc->_vocab.size() || _ctfc->_tfidf))
       {
 	// clearing up the corpus + tfidf
 	std::unordered_map<std::string,Word>::iterator whit;
@@ -177,7 +215,7 @@ namespace dd
       }
 
     // write corresp file
-    if (_ctfc->_train)
+    if (_ctfc->_train && !test_dir)
       {
 	std::ofstream correspf(_ctfc->_model_repo + "/" + _ctfc->_correspname,std::ios::binary);
 	auto hit = hcorresp.begin();
@@ -189,14 +227,15 @@ namespace dd
 	correspf.close();
       }    
 
-    LOG(INFO) << "vocabulary size=" << _ctfc->_vocab.size() << std::endl;
-        
+    _logger->info("vocabulary size={}",_ctfc->_vocab.size());
+    
     return 0;
   }
   
   /*- TxtInputFileConn -*/
   void TxtInputFileConn::parse_content(const std::string &content,
-				       const float &target)
+				       const float &target,
+				       const bool &test)
   {
     if (!_train && content.empty())
       throw InputConnectorBadParamException("no text data found");
@@ -247,7 +286,9 @@ namespace dd
 		  }
 		tbe->add_word(w,1.0,_count);
 	      }
-	    _txt.push_back(tbe);
+	    if (!test)
+	      _txt.push_back(tbe);
+	    else _test_txt.push_back(tbe);
 	  }
 	else // character-level features
 	  {
@@ -273,7 +314,7 @@ namespace dd
 		    }
 		  catch(...)
 		    {
-		      LOG(ERROR) << "Invalid UTF-8 character in " << w << std::endl;
+		      _logger->error("Invalid UTF-8 character in {}",w);
 		      c = 0;
 		      ++str_i;
 		    }
@@ -297,7 +338,9 @@ namespace dd
 		}
 		while(str_i<end && seq < _sequence);
 	      }
-	    _txt.push_back(tce);
+	    if (!test)
+	      _txt.push_back(tce);
+	    else _test_txt.push_back(tce);
 	    std::cerr << "\rloaded text samples=" << _txt.size();
 	  }
 
@@ -340,7 +383,7 @@ namespace dd
 	int pos = std::atoi(tokens.at(1).c_str());
 	_vocab.emplace(std::make_pair(key,Word(pos)));
       }
-    std::cerr << "loaded vocabulary of size=" << _vocab.size() << std::endl;
+    _logger->info("loaded vocabulary of size={}",_vocab.size());
   }
 
   void TxtInputFileConn::build_alphabet()

@@ -39,8 +39,10 @@ static std::string mnist_repo = "../examples/caffe/mnist/";
 static std::string forest_repo = "../examples/all/forest_type/";
 static std::string farm_repo = "../examples/all/farm_ads/";
 static std::string plank_repo = "../examples/caffe/plankton/";
+static std::string voc_repo = "../examples/caffe/voc/voc/";
 static std::string n20_repo = "../examples/all/n20/";
 static std::string sflare_repo = "../examples/all/sflare/";
+static std::string camvid_repo = "../examples/caffe/camvid/CamVid_square/";
 static std::string model_templates_repo = "../templates/caffe/";
 
 #ifndef CPU_ONLY
@@ -51,6 +53,7 @@ static std::string iterations_farm = "1000";
 static std::string iterations_n20 = "2000";
 static std::string iterations_n20_char = "1000";
 static std::string iterations_sflare = "5000";
+static std::string iterations_camvid = "600";
 #else
 static std::string iterations_mnist = "10";
 static std::string iterations_plank = "10";
@@ -59,13 +62,13 @@ static std::string iterations_farm = "500";
 static std::string iterations_n20 = "1000";
 static std::string iterations_n20_char = "10";
 static std::string iterations_sflare = "2000";
+static std::string iterations_camvid = "2";
 #endif
 
 static std::string gpuid = "0"; // change as needed
 
 TEST(caffeapi,service_train)
 {
-::google::InitGoogleLogging("ut_caffeapi");
 // create service
   JsonAPI japi;
   std::string sname = "my_service";
@@ -753,12 +756,12 @@ TEST(caffeapi,service_train_images)
   std::string plank_repo_loc = "plank";
   mkdir(plank_repo_loc.c_str(),0777);
   std::string sname = "my_service";
-  std::string jstr = "{\"mllib\":\"caffe\",\"description\":\"my classifier\",\"type\":\"supervised\",\"model\":{\"repository\":\"" +  plank_repo_loc + "\",\"templates\":\"" + model_templates_repo  + "\"},\"parameters\":{\"input\":{\"connector\":\"image\"},\"mllib\":{\"template\":\"cifar\",\"nclasses\":121}}}";
+  std::string jstr = "{\"mllib\":\"caffe\",\"description\":\"my classifier\",\"type\":\"supervised\",\"model\":{\"repository\":\"" +  plank_repo_loc + "\",\"templates\":\"" + model_templates_repo  + "\"},\"parameters\":{\"input\":{\"connector\":\"image\"},\"mllib\":{\"db\":true,\"template\":\"cifar\",\"nclasses\":121}}}";
   std::string joutstr = japi.jrender(japi.service_create(sname,jstr));
   ASSERT_EQ(created_str,joutstr);
 
   // train
-  std::string jtrainstr = "{\"service\":\"" + sname + "\",\"async\":false,\"parameters\":{\"input\":{\"width\":32,\"height\":32,\"test_split\":0.001,\"shuffle\":true,\"bw\":false},\"mllib\":{\"gpu\":true,\"gpuid\":"+gpuid+",\"solver\":{\"iterations\":" + iterations_plank + ",\"test_interval\":500,\"base_lr\":0.0001,\"snapshot\":2000,\"test_initialization\":false},\"net\":{\"batch_size\":100}},\"output\":{\"measure\":[\"acc\",\"acc-5\",\"mcll\",\"f1\"]}},\"data\":[\"" + plank_repo + "train\"]}";
+  std::string jtrainstr = "{\"service\":\"" + sname + "\",\"async\":false,\"parameters\":{\"input\":{\"db\":true,\"width\":32,\"height\":32,\"test_split\":0.001,\"shuffle\":true,\"bw\":false},\"mllib\":{\"gpu\":true,\"gpuid\":"+gpuid+",\"solver\":{\"iterations\":" + iterations_plank + ",\"test_interval\":500,\"base_lr\":0.0001,\"snapshot\":2000,\"test_initialization\":false},\"net\":{\"batch_size\":100}},\"output\":{\"measure\":[\"acc\",\"acc-5\",\"mcll\",\"f1\"]}},\"data\":[\"" + plank_repo + "train\"]}";
   joutstr = japi.jrender(japi.service_train(jtrainstr));
   std::cout << "joutstr=" << joutstr << std::endl;
   JDoc jd;
@@ -784,6 +787,135 @@ TEST(caffeapi,service_train_images)
   ASSERT_EQ(ok_str,joutstr);
   rmdir(plank_repo_loc.c_str());
 }
+
+
+TEST(caffeapi,service_train_images_imagedatalayer_1label)
+{
+  // create service
+  JsonAPI japi;
+  std::string plank_repo_loc = "plank";
+  mkdir(plank_repo_loc.c_str(),0777);
+  std::string sname = "my_service";
+  std::string jstr = "{\"mllib\":\"caffe\",\"description\":\"my classifier\",\"type\":\"supervised\",\"model\":{\"repository\":\"" +  plank_repo_loc + "\",\"templates\":\"" + model_templates_repo  + "\"},\"parameters\":{\"input\":{\"db\":false,\"connector\":\"image\"},\"mllib\":{\"template\":\"cifar\",\"nclasses\":121}}}";
+  std::string joutstr = japi.jrender(japi.service_create(sname,jstr));
+  ASSERT_EQ(created_str,joutstr);
+
+  // train
+  std::string jtrainstr = "{\"service\":\"" + sname + "\",\"async\":false,\"parameters\":{\"input\":{\"db\":false,\"width\":32,\"height\":32,\"test_split\":0.001,\"shuffle\":true,\"bw\":false,\"root_folder\":\"" + plank_repo + "\"},\"mllib\":{\"gpu\":true,\"gpuid\":"+gpuid+",\"solver\":{\"iterations\":" + iterations_plank + ",\"test_interval\":3000,\"base_lr\":0.0001,\"snapshot\":2000,\"test_initialization\":false},\"net\":{\"batch_size\":2}},\"output\":{\"measure\":[\"acc\",\"acc-5\",\"mcll\",\"f1\"]}},\"data\":[\"" + plank_repo + "file-lst.txt\",\"" + plank_repo + "file-lst-test.txt\"]}";
+  joutstr = japi.jrender(japi.service_train(jtrainstr));
+  std::cout << "joutstr=" << joutstr << std::endl;
+  JDoc jd;
+  jd.Parse(joutstr.c_str());
+  ASSERT_TRUE(!jd.HasParseError());
+  ASSERT_TRUE(jd.HasMember("status"));
+  ASSERT_EQ(201,jd["status"]["code"].GetInt());
+  ASSERT_EQ("Created",jd["status"]["msg"]);
+  ASSERT_TRUE(jd.HasMember("head"));
+  ASSERT_EQ("/train",jd["head"]["method"]);
+  ASSERT_TRUE(jd["head"]["time"].GetDouble() >= 0);
+  ASSERT_TRUE(jd.HasMember("body"));
+  ASSERT_TRUE(jd["body"]["measure"].HasMember("train_loss"));
+  ASSERT_TRUE(fabs(jd["body"]["measure"]["train_loss"].GetDouble()) > 0);
+  ASSERT_TRUE(jd["body"]["measure"].HasMember("f1"));
+  ASSERT_TRUE(jd["body"]["measure"]["acc"].GetDouble() >= 0.0);
+  ASSERT_TRUE(jd["body"]["measure"]["acc-5"].GetDouble() >= 0.0);
+  ASSERT_EQ(jd["body"]["measure"]["accp"].GetDouble(),jd["body"]["measure"]["acc"].GetDouble());
+
+  // remove service
+  jstr = "{\"clear\":\"full\"}";
+  joutstr = japi.jrender(japi.service_delete(sname,jstr));
+  ASSERT_EQ(ok_str,joutstr);
+  rmdir(plank_repo_loc.c_str());
+}
+
+TEST(caffeapi,service_train_images_imagedatalayer_multilabel)
+{
+  // create service
+  JsonAPI japi;
+  std::string plank_repo_loc = "plank";
+  mkdir(plank_repo_loc.c_str(),0777);
+  std::string sname = "my_service";
+  std::string jstr = "{\"mllib\":\"caffe\",\"description\":\"my classifier\",\"type\":\"supervised\",\"model\":{\"repository\":\"" +  plank_repo_loc + "\",\"templates\":\"" + model_templates_repo  + "\"},\"parameters\":{\"input\":{\"db\":false,\"connector\":\"image\",\"multi_label\":true},\"mllib\":{\"template\":\"cifar\",\"nclasses\":3}}}";
+  std::string joutstr = japi.jrender(japi.service_create(sname,jstr));
+  ASSERT_EQ(created_str,joutstr);
+
+  // train
+  std::string jtrainstr = "{\"service\":\"" + sname + "\",\"async\":false,\"parameters\":{\"input\":{\"db\":false,\"width\":32,\"height\":32,\"test_split\":0.001,\"shuffle\":true,\"bw\":false,\"root_folder\":\"" + plank_repo + "\"},\"mllib\":{\"gpu\":true,\"gpuid\":"+gpuid+",\"solver\":{\"iterations\":" + iterations_plank + ",\"test_interval\":3000,\"base_lr\":0.0001,\"snapshot\":2000,\"test_initialization\":false},\"net\":{\"batch_size\":2}},\"output\":{\"measure\":[\"acc\"]}},\"data\":[\"" + plank_repo + "file-lst-ml.txt\",\"" + plank_repo + "file-lst-test-ml.txt\"]}";
+  joutstr = japi.jrender(japi.service_train(jtrainstr));
+  std::cout << "joutstr=" << joutstr << std::endl;
+  JDoc jd;
+  jd.Parse(joutstr.c_str());
+  ASSERT_TRUE(!jd.HasParseError());
+  ASSERT_TRUE(jd.HasMember("status"));
+  ASSERT_EQ(201,jd["status"]["code"].GetInt());
+  ASSERT_EQ("Created",jd["status"]["msg"]);
+  ASSERT_TRUE(jd.HasMember("head"));
+  ASSERT_EQ("/train",jd["head"]["method"]);
+  ASSERT_TRUE(jd["head"]["time"].GetDouble() >= 0);
+  ASSERT_TRUE(jd.HasMember("body"));
+  ASSERT_TRUE(jd["body"]["measure"].HasMember("train_loss"));
+  ASSERT_TRUE(fabs(jd["body"]["measure"]["train_loss"].GetDouble()) > 0);
+  ASSERT_TRUE(jd["body"]["measure"].HasMember("f1"));
+  ASSERT_TRUE(jd["body"]["measure"]["f1"].GetDouble() >= 0.0);
+
+  // remove service
+  jstr = "{\"clear\":\"full\"}";
+  joutstr = japi.jrender(japi.service_delete(sname,jstr));
+  ASSERT_EQ(ok_str,joutstr);
+  rmdir(plank_repo_loc.c_str());
+}
+
+TEST(caffeapi,service_train_images_imagedatalayer_multilabel_softprob)
+{
+  // create service
+  JsonAPI japi;
+  std::string plank_repo_loc = "plank";
+  mkdir(plank_repo_loc.c_str(),0777);
+  std::string sname = "my_service";
+  std::string jstr = "{\"mllib\":\"caffe\",\"description\":\"my classifier\",\"type\":\"supervised\",\"model\":{\"repository\":\"" +  plank_repo_loc + "\",\"templates\":\"" + model_templates_repo  + "\"},\"parameters\":{\"input\":{\"db\":false,\"connector\":\"image\",\"multi_label\":true},\"mllib\":{\"template\":\"cifar\",\"nclasses\":3,\"regression\":true}}}";
+  std::string joutstr = japi.jrender(japi.service_create(sname,jstr));
+  ASSERT_EQ(created_str,joutstr);
+
+  // train
+  std::string jtrainstr = "{\"service\":\"" + sname + "\",\"async\":false,\"parameters\":{\"input\":{\"db\":false,\"width\":32,\"height\":32,\"test_split\":0.001,\"shuffle\":true,\"bw\":false,\"root_folder\":\"" + plank_repo + "\"},\"mllib\":{\"gpu\":true,\"gpuid\":"+gpuid+",\"solver\":{\"iterations\":" + iterations_plank + ",\"test_interval\":3000,\"base_lr\":0.0001,\"snapshot\":2000,\"test_initialization\":false},\"net\":{\"batch_size\":2}},\"output\":{\"measure\":[\"acc\"]}},\"data\":[\"" + plank_repo + "file-lst-ml.txt\",\"" + plank_repo + "file-lst-test-ml.txt\"]}";
+  joutstr = japi.jrender(japi.service_train(jtrainstr));
+  std::cout << "joutstr=" << joutstr << std::endl;
+  JDoc jd;
+  jd.Parse(joutstr.c_str());
+  ASSERT_TRUE(!jd.HasParseError());
+  ASSERT_TRUE(jd.HasMember("status"));
+  ASSERT_EQ(201,jd["status"]["code"].GetInt());
+  ASSERT_EQ("Created",jd["status"]["msg"]);
+  ASSERT_TRUE(jd.HasMember("head"));
+  ASSERT_EQ("/train",jd["head"]["method"]);
+  ASSERT_TRUE(jd["head"]["time"].GetDouble() >= 0);
+  ASSERT_TRUE(jd.HasMember("body"));
+  ASSERT_TRUE(jd["body"]["measure"].HasMember("train_loss"));
+  ASSERT_TRUE(fabs(jd["body"]["measure"]["train_loss"].GetDouble()) > 0);
+  ASSERT_TRUE(jd["body"]["measure"].HasMember("kl_divergence"));
+  ASSERT_TRUE(jd["body"]["measure"]["kl_divergence"].GetDouble() >= 0.0);
+  ASSERT_TRUE(jd["body"]["measure"].HasMember("kolmogorov_smirnov"));
+  ASSERT_TRUE(jd["body"]["measure"]["kolmogorov_smirnov"].GetDouble() >= 0.0);
+  ASSERT_TRUE(jd["body"]["measure"].HasMember("distance_correlation"));
+  ASSERT_TRUE(jd["body"]["measure"]["distance_correlation"].GetDouble() >= 0.0);
+  ASSERT_TRUE(jd["body"]["measure"].HasMember("r2"));
+  ASSERT_TRUE(jd["body"]["measure"]["r2"].GetDouble() <= 1.0);
+  ASSERT_TRUE(jd["body"]["measure"].HasMember("delta_score_0.05"));
+  ASSERT_TRUE(jd["body"]["measure"]["delta_score_0.05"].GetDouble() >= 0.0);
+  ASSERT_TRUE(jd["body"]["measure"].HasMember("delta_score_0.1"));
+  ASSERT_TRUE(jd["body"]["measure"]["delta_score_0.1"].GetDouble() >= 0.0);
+  ASSERT_TRUE(jd["body"]["measure"].HasMember("delta_score_0.2"));
+  ASSERT_TRUE(jd["body"]["measure"]["delta_score_0.2"].GetDouble() >= 0.0);
+  ASSERT_TRUE(jd["body"]["measure"].HasMember("delta_score_0.5"));
+  ASSERT_TRUE(jd["body"]["measure"]["delta_score_0.5"].GetDouble() >= 0.0);
+
+  // remove service
+  jstr = "{\"clear\":\"full\"}";
+  joutstr = japi.jrender(japi.service_delete(sname,jstr));
+  ASSERT_EQ(ok_str,joutstr);
+  rmdir(plank_repo_loc.c_str());
+}
+
 
 TEST(caffeapi,service_train_images_convnet)
 {
@@ -861,6 +993,66 @@ TEST(caffeapi,service_train_images_resnet)
   joutstr = japi.jrender(japi.service_delete(sname,jstr));
   ASSERT_EQ(ok_str,joutstr);
   rmdir(plank_repo_loc.c_str());
+}
+
+TEST(caffeapi,service_train_images_seg)
+{
+  // create service
+  JsonAPI japi;
+  std::string camvid_repo_loc = "camvid";
+  mkdir(camvid_repo_loc.c_str(),0777);
+  std::string sname = "my_service";
+  std::string jstr = "{\"mllib\":\"caffe\",\"description\":\"my classifier\",\"type\":\"supervised\",\"model\":{\"repository\":\"" +  camvid_repo_loc + "\",\"templates\":\"" + model_templates_repo  + "\"},\"parameters\":{\"input\":{\"connector\":\"image\",\"segmentation\":true,\"width\":480,\"height\":480},\"mllib\":{\"template\":\"unet\",\"nclasses\":11}}}";
+  std::string joutstr = japi.jrender(japi.service_create(sname,jstr));
+  ASSERT_EQ(created_str,joutstr);
+
+  // train
+  std::string jtrainstr = "{\"service\":\"" + sname + "\",\"async\":false,\"parameters\":{\"input\":{\"segmentation\":true},\"mllib\":{\"gpu\":true,\"gpuid\":"+gpuid+",\"class_weights\":[0.2595,0.1826,4.5640,0.1417,0.9051,0.3826,9.6446,1.8418,0.6823,6.2478,7.3614],\"ignore_label\":11,\"solver\":{\"iterations\":" + iterations_camvid + ",\"test_interval\":200,\"base_lr\":0.001,\"test_initialization\":false,\"mirror\":true,\"solver_type\":\"SGD\"},\"net\":{\"batch_size\":1,\"test_batch_size\":1}},\"output\":{\"measure\":[\"acc\"]}},\"data\":[\"" + camvid_repo + "train.txt\",\"" + camvid_repo + "test2.txt\"]}";
+  joutstr = japi.jrender(japi.service_train(jtrainstr));
+  std::cout << "joutstr=" << joutstr << std::endl;
+  JDoc jd;
+  jd.Parse(joutstr.c_str());
+  ASSERT_TRUE(!jd.HasParseError());
+  ASSERT_TRUE(jd.HasMember("status"));
+  ASSERT_EQ(201,jd["status"]["code"].GetInt());
+  ASSERT_EQ("Created",jd["status"]["msg"]);
+  ASSERT_TRUE(jd.HasMember("head"));
+  ASSERT_EQ("/train",jd["head"]["method"]);
+  ASSERT_TRUE(jd["head"]["time"].GetDouble() >= 0);
+  ASSERT_TRUE(jd.HasMember("body"));
+  ASSERT_TRUE(jd["body"]["measure"].HasMember("train_loss"));
+  ASSERT_TRUE(fabs(jd["body"]["measure"]["train_loss"].GetDouble()) > 0);
+  ASSERT_TRUE(jd["body"]["measure"]["acc"].GetDouble() >= 0.0);
+
+  // remove service
+  jstr = "{\"clear\":\"full\"}";
+  joutstr = japi.jrender(japi.service_delete(sname,jstr));
+  ASSERT_EQ(ok_str,joutstr);
+  rmdir(camvid_repo_loc.c_str());
+}
+
+TEST(caffeapi,service_test_bbox)
+{
+    // create service
+  JsonAPI japi;
+  std::string sname = "my_service";
+  std::string jstr = "{\"mllib\":\"caffe\",\"description\":\"my classifier\",\"type\":\"supervised\",\"model\":{\"repository\":\"" +  voc_repo + "\"},\"parameters\":{\"input\":{\"connector\":\"image\",\"width\":300,\"height\":300},\"mllib\":{\"nclasses\":21}}}";
+  std::cerr << "jstr=" << jstr << std::endl;
+  std::string joutstr = japi.jrender(japi.service_create(sname,jstr));
+  ASSERT_EQ(created_str,joutstr);
+  JDoc jd;
+
+  // predict
+  std::string jpredictstr = "{\"service\":\""+ sname + "\",\"parameters\":{\"input\":{},\"mllib\":{},\"output\":{\"bbox\":true,\"confidence_threshold\":0.1}},\"data\":[\"" + voc_repo + "/test_img.jpg\"]}";
+  std::cerr << "jpredictstr=" << jpredictstr << std::endl;
+  joutstr = japi.jrender(japi.service_predict(jpredictstr));
+  std::cout << "joutstr predict=" << joutstr << std::endl;
+  jd.Parse(joutstr.c_str());
+  ASSERT_TRUE(!jd.HasParseError());
+  ASSERT_EQ(200,jd["status"]["code"]);
+  ASSERT_TRUE(jd["body"]["predictions"][0].HasMember("classes"));
+  ASSERT_TRUE(jd["body"]["predictions"][0]["classes"][0].HasMember("bbox"));
+  ASSERT_TRUE(jd["body"]["predictions"][0]["classes"][0]["bbox"].HasMember("xmin"));
 }
 
 TEST(caffeapi,service_train_txt)
@@ -1149,3 +1341,4 @@ TEST(caffeapi,service_train_csv_mt_regression)
   ASSERT_EQ(ok_str,joutstr);
   rmdir(sflare_repo_loc.c_str());
 }
+

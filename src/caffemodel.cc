@@ -22,7 +22,6 @@
 #include "caffemodel.h"
 #include "mllibstrategy.h"
 #include "utils/fileops.hpp"
-#include <glog/logging.h>
 #include <exception>
 #include <fstream>
 #include <iostream>
@@ -35,24 +34,27 @@ namespace dd
     if (ad.has("templates"))
       this->_mlmodel_template_repo = ad.get("templates").get<std::string>();
     else this->_mlmodel_template_repo += "caffe/"; // default
+
+    if (ad.has("def"))
+      _def = ad.get("def").get<std::string>();
+    if (ad.has("trainf"))
+      _trainf = ad.get("trainf").get<std::string>();
+    if (ad.has("weights"))
+      _weights = ad.get("weights").get<std::string>();
+    if (ad.has("corresp"))
+      _corresp = ad.get("corresp").get<std::string>();
+    if (ad.has("solver"))
+      _solver = ad.get("solver").get<std::string>();
     if (ad.has("repository"))
       {
-       	if (read_from_repository(ad.get("repository").get<std::string>()))
+       	if (read_from_repository(ad.get("repository").get<std::string>(),spdlog::get("api")))
 	  throw MLLibBadParamException("error reading or listing Caffe models in repository " + _repo);
       }
-    else
-      {
-	_def = ad.get("def").get<std::string>();
-	_trainf = ad.get("trainf").get<std::string>();
-	_weights = ad.get("weights").get<std::string>();
-	_corresp = ad.get("corresp").get<std::string>();
-	_solver = ad.get("solver").get<std::string>();
-      }
-
     read_corresp_file();
   }
   
-  int CaffeModel::read_from_repository(const std::string &repo)
+  int CaffeModel::read_from_repository(const std::string &repo,
+				       const std::shared_ptr<spdlog::logger> &logger)
   {
     static std::string deploy = "deploy.prototxt";
     static std::string train = ".prototxt";
@@ -66,7 +68,7 @@ namespace dd
     int e = fileops::list_directory(repo,true,false,lfiles);
     if (e != 0)
       {
-	LOG(ERROR) << "error reading or listing caffe models in repository " << repo << std::endl;
+	logger->error("error reading or listing caffe models in repository {}",repo);
 	return 1;
       }
     std::string deployf,trainf,weightsf,correspf,solverf,sstatef;
@@ -114,18 +116,18 @@ namespace dd
 	  trainf = (*hit);
 	++hit;
       }
-    _def = deployf;
-    _trainf = trainf;
-    _weights = weightsf;
-    _corresp = correspf;
-    _solver = solverf;
-    _sstate = sstatef;
-    
-    /*    if (deployf.empty() || weightsf.empty())
-      {
-	LOG(ERROR) << "missing caffe model file(s) in repository\n";
-	return CaffeModel();
-	}*/
+    if (_def.empty())
+      _def = deployf;
+    if (_trainf.empty())
+      _trainf = trainf;
+    if (_weights.empty())
+      _weights = weightsf;
+    if (_corresp.empty())
+      _corresp = correspf;
+    if (_solver.empty())
+      _solver = solverf;
+    if (_sstate.empty())
+      _sstate = sstatef;    
     return 0;
   }
 }

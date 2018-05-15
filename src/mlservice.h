@@ -84,7 +84,13 @@ namespace dd
 	      const TMLModel &mlmodel,
 	      const std::string &description="")
       :TMLLib<TInputConnectorStrategy,TOutputConnectorStrategy,TMLModel>(mlmodel),_sname(sname),_description(description),_tjobs_counter(0)
-      {}
+      {
+#ifdef USE_DD_SYSLOG
+	this->_logger = spdlog::syslog_logger(_sname);
+#else
+	this->_logger = spdlog::stdout_logger_mt(_sname);
+#endif
+      }
     
     /**
      * \brief copy-constructor
@@ -100,6 +106,7 @@ namespace dd
     ~MLService() 
       {
 	kill_jobs();
+	spdlog::drop(_sname);
       }
 
     /**
@@ -114,6 +121,8 @@ namespace dd
       this->_inputc._model_repo = ad.getobj("model").get("repository").get<std::string>();
       if (this->_inputc._model_repo.empty())
 	throw MLLibBadParamException("empty repository");
+      this->_inputc._logger = this->_logger;
+      this->_outputc._logger = this->_logger;
       this->_inputc.init(ad.getobj("parameters").getobj("input"));
       this->_outputc.init(ad.getobj("parameters").getobj("output"));
       this->init_mllib(ad.getobj("parameters").getobj("mllib"));
@@ -254,6 +263,7 @@ namespace dd
 	    {
 	      out.add("status","running");
 	      this->collect_measures(out);
+	      this->est_remain_time(out);
 	      std::chrono::time_point<std::chrono::system_clock> trun = std::chrono::system_clock::now();
 	      out.add("time",std::chrono::duration_cast<std::chrono::seconds>(trun-(*hit).second._tstart).count());
 	      if (ad_params_out.has("measure_hist") && ad_params_out.get("measure_hist").get<bool>())

@@ -44,6 +44,7 @@ namespace dd
     int read_dir(const std::string &dir);
 
     TxtInputFileConn *_ctfc = nullptr;
+    std::shared_ptr<spdlog::logger> _logger;
   };
 
   class Word
@@ -263,7 +264,7 @@ namespace dd
 	{
 	  DataEl<DDTxt> dtxt;
 	  dtxt._ctype._ctfc = this;
-	  if (dtxt.read_element(u) || (_txt.empty() && _db_fname.empty()))
+	  if (dtxt.read_element(u,this->_logger) || (_txt.empty() && _db_fname.empty()))
 	    {
 	      throw InputConnectorBadParamException("no data for text in " + u);
 	    }
@@ -273,7 +274,10 @@ namespace dd
 	}
       
       if (_train)
-	serialize_vocab();
+	{
+	  _shuffle = true;
+	  serialize_vocab();
+	}
 
       // shuffle entries if requested
       if (_train && _shuffle)
@@ -317,7 +321,8 @@ namespace dd
 
     // text tokenization for BOW
     void parse_content(const std::string &content,
-		       const float &target=-1);
+		       const float &target=-1,
+		       const bool &test=false);
 
     // serialization of vocabulary
     void serialize_vocab();
@@ -350,6 +355,7 @@ namespace dd
     std::unordered_map<std::string,Word> _vocab; /**< string to word stats, including word */
     std::string _vocabfname = "vocab.dat";
     std::string _correspname = "corresp.txt";
+    int _dirs = 0; /**< directories as input. */
     
     // data
     std::vector<TxtEntry<double>*> _txt;

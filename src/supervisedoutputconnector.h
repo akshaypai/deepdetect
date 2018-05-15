@@ -60,15 +60,40 @@ namespace dd
 	_cats.insert(std::pair<double,std::string>(prob,cat));
       }
 
-      inline void add_extra(const double &prob, const APIData &ad)
+      inline void add_bbox(const double &prob, const APIData &ad)
       {
-	_extra.insert(std::pair<double,APIData>(prob,ad));
+        _bboxes.insert(std::pair<double,APIData>(prob,ad));
+      }
+
+      inline void add_val(const double &prob, const APIData &ad)
+      {
+        _vals.insert(std::pair<double,APIData>(prob,ad));
+      }
+
+#ifdef USE_SIMSEARCH
+      void add_nn(const double &dist, const URIData &uri)
+      {
+	_nns.insert(std::pair<double,URIData>(dist,uri));
       }
       
+      void add_bbox_nn(const int &bb, const double &dist, const URIData &uri)
+      {
+	if (_bbox_nns.empty())
+	  _bbox_nns = std::vector<std::multimap<double,URIData>>(_bboxes.size(),std::multimap<double,URIData>());
+	_bbox_nns.at(bb).insert(std::pair<double,URIData>(dist,uri));
+      }
+#endif
+
       std::string _label;
       double _loss = 0.0; /**< result loss. */
       std::multimap<double,std::string,std::greater<double>> _cats; /**< categories and probabilities for this result */
-      std::multimap<double,APIData,std::greater<double>> _extra; /**< extra data or information added to output, e.g. bboxes. */
+      std::multimap<double,APIData,std::greater<double>> _bboxes; /**< bounding boxes information */
+      std::multimap<double,APIData,std::greater<double>> _vals; /**< extra data or information added to output, e.g. roi */
+#ifdef USE_SIMSEARCH
+      bool _indexed = false;
+      std::multimap<double,URIData> _nns; /**< nearest neigbors. */
+      std::vector<std::multimap<double,URIData>> _bbox_nns; /**< per bbox nearest neighbors. */
+#endif      
     };
 
   public:
@@ -117,9 +142,13 @@ namespace dd
 	  double loss = ad.get("loss").get<double>();
 	  std::vector<double> probs = ad.get("probs").get<std::vector<double>>();
 	  std::vector<std::string> cats = ad.get("cats").get<std::vector<std::string>>();
-	  std::vector<APIData> vextra;
+	  std::vector<APIData> bboxes;
+	  std::vector<APIData> rois;
 	  if (ad.has("bboxes"))
-	    vextra = ad.getv("bboxes");
+	    bboxes = ad.getv("bboxes");
+	  if (ad.has("vals")) {
+	    rois = ad.getv("vals");
+	  }
 	  if ((hit=_vcats.find(uri))==_vcats.end())
 	    {
 	      auto resit = _vcats.insert(std::pair<std::string,int>(uri,_vvcats.size()));
@@ -128,8 +157,10 @@ namespace dd
 	      for (size_t i=0;i<probs.size();i++)
 		{
 		  _vvcats.at((*hit).second).add_cat(probs.at(i),cats.at(i));
-		  if (!vextra.empty())
-		    _vvcats.at((*hit).second).add_extra(probs.at(i),vextra.at(i));
+		  if (!bboxes.empty())
+		    _vvcats.at((*hit).second).add_bbox(probs.at(i),bboxes.at(i));
+		  if (!rois.empty())
+		    _vvcats.at((*hit).second).add_val(probs.at(i),rois.at(i));
 		}
 	    }
 	}
@@ -140,14 +171,14 @@ namespace dd
      * @param ad_out output data object
      * @param bcats supervised output connector
      */
-    void best_cats(const APIData &ad_out, SupervisedOutput &bcats, const int &nclasses, const bool &has_bbox) const
+    void best_cats(const APIData &ad_out, SupervisedOutput &bcats, const int &nclasses, const bool &has_bbox, const bool &has_roi) const
     {
       int best = _best;
       if (ad_out.has("best"))
 	best = ad_out.get("best").get<int>();
       if (best == -1)
 	best = nclasses;
-      if (!has_bbox)
+      if (!has_bbox && !has_roi)
 	{
 	  for (size_t i=0;i<_vvcats.size();i++)
 	    {
@@ -155,9 +186,13 @@ namespace dd
 	      sup_result bsresult(sresult._label,sresult._loss);
 	      std::copy_n(sresult._cats.begin(),std::min(best,static_cast<int>(sresult._cats.size())),
 			  std::inserter(bsresult._cats,bsresult._cats.end()));
-	      if (!sresult._extra.empty())
-		std::copy_n(sresult._extra.begin(),std::min(best,static_cast<int>(sresult._extra.size())),
-			    std::inserter(bsresult._extra,bsresult._extra.end()));
+	      if (!sresult._bboxes.empty())
+		std::copy_n(sresult._bboxes.begin(),std::min(best,static_cast<int>(sresult._bboxes.size())),
+			    std::inserter(bsresult._bboxes,bsresult._bboxes.end()));
+	      if (!sresult._vals.empty())
+		std::copy_n(sresult._vals.begin(),std::min(best,static_cast<int>(sresult._vals.size())),
+			    std::inserter(bsresult._vals,bsresult._vals.end()));
+	      
 	      bcats._vcats.insert(std::pair<std::string,int>(sresult._label,bcats._vvcats.size()));
 	      bcats._vvcats.push_back(bsresult);
 	    }
@@ -174,19 +209,23 @@ namespace dd
 		  int nbest = sresult._cats.size();
 		  std::copy_n(sresult._cats.begin(),std::min(nbest,static_cast<int>(sresult._cats.size())),
 			      std::inserter(bsresult._cats,bsresult._cats.end()));
-		  if (!sresult._extra.empty())
-		    std::copy_n(sresult._extra.begin(),std::min(nbest,static_cast<int>(sresult._extra.size())),
-				std::inserter(bsresult._extra,bsresult._extra.end()));
+		  if (!sresult._bboxes.empty())
+		    std::copy_n(sresult._bboxes.begin(),std::min(nbest,static_cast<int>(sresult._bboxes.size())),
+				std::inserter(bsresult._bboxes,bsresult._bboxes.end()));
 		}
 	      else
 		{
 		  std::unordered_map<std::string,int> lboxes;
 		  auto bbit = lboxes.begin();
 		  auto mit = sresult._cats.begin();
-		  auto mitx = sresult._extra.begin();
-		  while(mitx!=sresult._extra.end())
+		  auto mitx = sresult._bboxes.begin();
+		  auto mity = sresult._vals.begin();
+		  while(mitx!=sresult._bboxes.end())
 		    {
 		      APIData bbad = (*mitx).second;
+		      APIData vvad;
+		      if (has_roi)
+			vvad = (*mity).second;
 		      std::string bbkey = std::to_string(bbad.get("xmin").get<double>())
 			+ "-" + std::to_string(bbad.get("ymin").get<double>())
 			+ "-" + std::to_string(bbad.get("xmax").get<double>())
@@ -197,21 +236,25 @@ namespace dd
 			  if ((*bbit).second <= best)
 			    {
 			      bsresult._cats.insert(std::pair<double,std::string>((*mit).first,(*mit).second));
-			      bsresult._extra.insert(std::pair<double,APIData>((*mitx).first,bbad));
+			      bsresult._bboxes.insert(std::pair<double,APIData>((*mitx).first,bbad));
+			      if (has_roi)
+				bsresult._vals.insert(std::pair<double,APIData>((*mity).first,vvad));
 			    }
 			}
 		      else
 			{
 			  lboxes.insert(std::pair<std::string,int>(bbkey,1));
 			  bsresult._cats.insert(std::pair<double,std::string>((*mit).first,(*mit).second));
-			  bsresult._extra.insert(std::pair<double,APIData>((*mitx).first,bbad));
+			  bsresult._bboxes.insert(std::pair<double,APIData>((*mitx).first,bbad));
+			  if (has_roi)
+			    bsresult._vals.insert(std::pair<double,APIData>((*mity).first,vvad));
 			}
 		      ++mitx;
 		      ++mit;
+		      if (has_roi)
+			++mity;
 		    }
 		}
-	      
-	      
 	      bcats._vcats.insert(std::pair<std::string,int>(sresult._label,bcats._vvcats.size()));
 	      bcats._vvcats.push_back(bsresult);
 	    }
@@ -223,8 +266,11 @@ namespace dd
      * @param ad_in data output object from the API call
      * @param ad_out data object as the call response
      */
-    void finalize(const APIData &ad_in, APIData &ad_out)
+    void finalize(const APIData &ad_in, APIData &ad_out, MLModel *mlm)
     {
+#ifndef USE_SIMSEARCH
+      (void)mlm;
+#endif
       SupervisedOutput bcats(*this);
       bool regression = false;
       bool autoencoder = false;
@@ -248,14 +294,155 @@ namespace dd
 	  ad_out.erase("autoencoder");
 	}
       bool has_bbox = false;
+      bool has_roi = false;
       if (ad_out.has("bbox") && ad_out.get("bbox").get<bool>())
 	{
 	  has_bbox = true;
 	  ad_out.erase("nclasses");
 	  ad_out.erase("bbox");
 	}
-      best_cats(ad_in,bcats,nclasses,has_bbox);
-      bcats.to_ad(ad_out,regression,autoencoder);
+
+      if (ad_out.has("roi") && ad_out.get("roi").get<bool>())
+        {
+          has_roi = true;
+        }
+
+      best_cats(ad_in,bcats,nclasses,has_bbox,has_roi);
+      
+      std::unordered_set<std::string> indexed_uris;
+#ifdef USE_SIMSEARCH
+      // index
+      if (ad_in.has("index") && ad_in.get("index").get<bool>())
+	{
+	  // check whether index has been created
+	  if (!mlm->_se)
+	    {
+	      int index_dim = _best;
+	      if (has_roi)
+		index_dim = (*bcats._vvcats.at(0)._vals.begin()).second.get("vals").get<std::vector<double>>().size(); // lookup to the first roi dimensions
+	      mlm->create_sim_search(index_dim);
+	    }
+
+	  // index output content
+	  if (!has_roi)
+	    {
+	      for (size_t i=0;i<bcats._vvcats.size();i++)
+		{
+		  std::vector<double> probs;
+		  auto mit = bcats._vvcats.at(i)._cats.begin();
+		  while(mit!=bcats._vvcats.at(i)._cats.end())
+		    {
+		      probs.push_back((*mit).first);
+		      ++mit;
+		    }
+		  URIData urid(bcats._vvcats.at(i)._label);
+		  mlm->_se->index(urid,probs);
+		  indexed_uris.insert(urid._uri);
+		}
+	    }
+	  else // roi
+	    {
+	      int nrois = 0;
+	      for (size_t i=0;i<bcats._vvcats.size();i++)
+		{
+		  auto vit = bcats._vvcats.at(i)._vals.begin();
+		  auto bit = bcats._vvcats.at(i)._bboxes.begin();
+		  auto mit = bcats._vvcats.at(i)._cats.begin();
+		  while(mit!=bcats._vvcats.at(i)._cats.end())
+		    {
+		      std::vector<double> bbox = {(*bit).second.get("xmin").get<double>(),
+						  (*bit).second.get("ymin").get<double>(),
+						  (*bit).second.get("xmax").get<double>(),
+						  (*bit).second.get("ymax").get<double>()};
+		      double prob = (*mit).first;
+		      std::string cat = (*mit).second;
+		      URIData urid(bcats._vvcats.at(i)._label,
+				   bbox,prob,cat);
+		      mlm->_se->index(urid,(*vit).second.get("vals").get<std::vector<double>>());
+		      ++mit;
+		      ++vit;
+		      ++bit;
+		      ++nrois;
+		      indexed_uris.insert(urid._uri);
+		    }
+		}
+	    }
+	}
+      
+      // build index
+      if (ad_in.has("build_index") && ad_in.get("build_index").get<bool>())
+	{
+	  if (mlm->_se)
+	    mlm->build_index();
+	  else throw SimIndexException("Cannot build index if not created");
+	}
+
+      // search
+      if (ad_in.has("search") && ad_in.get("search").get<bool>())
+	{
+	  // check whether index has been created
+	  if (!mlm->_se)
+	    {
+	      int index_dim = _best;
+	      if (has_roi && !bcats._vvcats.at(0)._vals.empty())
+		{
+		  index_dim = (*bcats._vvcats.at(0)._vals.begin()).second.get("vals").get<std::vector<double>>().size(); // lookup to the first roi dimensions
+		  mlm->create_sim_search(index_dim);
+		}
+	    }
+	  
+	  int search_nn = _best;
+	  if (has_roi)
+	    search_nn = _search_nn;
+	  if (ad_in.has("search_nn"))
+	    search_nn = ad_in.get("search_nn").get<int>();
+	  if (!has_roi)
+	    {
+	      for (size_t i=0;i<bcats._vvcats.size();i++)
+		{
+		  std::vector<double> probs;
+		  auto mit = bcats._vvcats.at(i)._cats.begin();
+		  while(mit!=bcats._vvcats.at(i)._cats.end())
+		    {
+		      probs.push_back((*mit).first);
+		      ++mit;
+		    }
+		  std::vector<URIData> nn_uris;
+		  std::vector<double> nn_distances;
+		  mlm->_se->search(probs,search_nn,nn_uris,nn_distances);
+		  for (size_t j=0;j<nn_uris.size();j++)
+		    {
+		      bcats._vvcats.at(i).add_nn(nn_distances.at(j),nn_uris.at(j));
+		    }
+		}
+	    }
+	  else // has_roi
+	    {
+	      for (size_t i=0;i<bcats._vvcats.size();i++)
+		{
+		  int bb = 0;
+		  auto vit = bcats._vvcats.at(i)._vals.begin();
+		  auto mit = bcats._vvcats.at(i)._cats.begin(); 
+		  while(mit!=bcats._vvcats.at(i)._cats.end()) // equivalent to iterating the bboxes
+		    {
+		      std::vector<URIData> nn_uris;
+		      std::vector<double> nn_distances;
+		      mlm->_se->search((*vit).second.get("vals").get<std::vector<double>>(),
+				       search_nn,nn_uris,nn_distances);
+		      ++mit;
+		      ++vit;
+		      for (size_t j=0;j<nn_uris.size();j++)
+			{
+			  bcats._vvcats.at(i).add_bbox_nn(bb,nn_distances.at(j),nn_uris.at(j));
+			}
+		      ++bb;
+		    }
+		}
+	    }
+	}      
+#endif
+      
+      bcats.to_ad(ad_out,regression,autoencoder,has_bbox,has_roi,indexed_uris);
     }
     
     struct PredictionAndAnswer {
@@ -271,22 +458,59 @@ namespace dd
       bool loss = ad_res.has("loss");
       bool iter = ad_res.has("iteration");
       bool regression = ad_res.has("regression");
+      bool segmentation = ad_res.has("segmentation");
+      bool multilabel = ad_res.has("multilabel");
       if (ad_out.has("measure"))
 	{
 	  std::vector<std::string> measures = ad_out.get("measure").get<std::vector<std::string>>();
       	  bool bauc = (std::find(measures.begin(),measures.end(),"auc")!=measures.end());
 	  bool bacc = false;
-	  for (auto s: measures)
-	    if (s.find("acc")!=std::string::npos)
-	      {
-		bacc = true;
-		break;
-	      }
+
+	  if (!multilabel && !segmentation)
+	    {
+	      for (auto s: measures)
+		if (s.find("acc")!=std::string::npos)
+		  {
+		    bacc = true;
+		    break;
+		  }
+	    }
 	  bool bf1 = (std::find(measures.begin(),measures.end(),"f1")!=measures.end());
 	  bool bmcll = (std::find(measures.begin(),measures.end(),"mcll")!=measures.end());
 	  bool bgini = (std::find(measures.begin(),measures.end(),"gini")!=measures.end());
 	  bool beucll = (std::find(measures.begin(),measures.end(),"eucll")!=measures.end());
 	  bool bmcc = (std::find(measures.begin(),measures.end(),"mcc")!=measures.end());
+	  bool baccv = false;
+	  bool mlacc = false;
+      bool mlsoft_kl = false;
+      bool mlsoft_js = false;
+      bool mlsoft_was = false;
+      bool mlsoft_ks = false;
+      bool mlsoft_dc = false;
+      bool mlsoft_r2 = false;
+      bool mlsoft_deltas = false;
+       if (segmentation)
+	    baccv = (std::find(measures.begin(),measures.end(),"acc")!=measures.end());
+	  if (multilabel && !regression)
+	    mlacc = (std::find(measures.begin(),measures.end(),"acc")!=measures.end());
+      if (multilabel && regression)
+        {
+	  bool acc =  (std::find(measures.begin(),measures.end(),"acc")!=measures.end());
+	  if (acc)
+	    {
+	      mlsoft_kl = mlsoft_js = mlsoft_was = mlsoft_ks = mlsoft_dc = mlsoft_r2 = mlsoft_deltas = true;
+	    }
+	  else
+	    {
+	      mlsoft_kl = (std::find(measures.begin(),measures.end(),"kl")!=measures.end());
+	      mlsoft_js = (std::find(measures.begin(),measures.end(),"js")!=measures.end());
+	      mlsoft_was = (std::find(measures.begin(),measures.end(),"was")!=measures.end());
+	      mlsoft_ks = (std::find(measures.begin(),measures.end(),"ks")!=measures.end());
+	      mlsoft_dc = (std::find(measures.begin(),measures.end(),"dc")!=measures.end());
+	      mlsoft_r2 = (std::find(measures.begin(),measures.end(),"r2")!=measures.end());
+	      mlsoft_deltas = (std::find(measures.begin(),measures.end(),"deltas")!=measures.end());
+	    }
+	}
 	  if (bauc) // XXX: applies two binary classification problems only
 	    {
 	      double mauc = auc(ad_res);
@@ -302,7 +526,70 @@ namespace dd
 		  ++mit;
 		}
 	    }
-	  if (bf1)
+	  if (baccv)
+	    {
+	      double meanacc, meaniou;
+	      std::vector<double> clacc;
+	      double accs = acc_v(ad_res,meanacc,meaniou,clacc);
+	      meas_out.add("acc",accs);
+	      meas_out.add("meanacc",meanacc);
+	      meas_out.add("meaniou",meaniou);
+	      meas_out.add("clacc",clacc);
+	    }
+	  if (mlacc)
+	    {
+	      double f1, sensitivity, specificity, harmmean, precision;
+	      multilabel_acc(ad_res,sensitivity,specificity,harmmean,precision,f1);
+	      meas_out.add("f1",f1);
+	      meas_out.add("precision",precision);
+	      meas_out.add("sensitivity",sensitivity);
+	      meas_out.add("specificity",specificity);
+	      meas_out.add("harmmean",harmmean);
+	    }
+      if (mlsoft_kl)
+        {
+          double kl_divergence = multilabel_soft_kl(ad_res); // kl: amount of lost info if using pred instead of truth
+          meas_out.add("kl_divergence",kl_divergence);
+        }
+      if (mlsoft_js)
+        {
+          double js_divergence = multilabel_soft_js(ad_res) ; // jsd: symetrized version of kl
+	      meas_out.add("js_divergence",js_divergence);
+        }
+      if (mlsoft_was)
+        {
+          double wasserstein = multilabel_soft_was(ad_res); // wasserstein distance
+	      meas_out.add("wasserstein",wasserstein);
+        }
+      if (mlsoft_ks)
+        {
+          double kolmogorov_smirnov = multilabel_soft_ks(ad_res); // kolmogorov-smirnov test aka max individual error
+	      meas_out.add("kolmogorov_smirnov",kolmogorov_smirnov);
+        }
+      if (mlsoft_dc)
+        {
+          double distance_correlation = multilabel_soft_dc(ad_res); // distance correlation , same as brownian correlation
+	      meas_out.add("distance_correlation",distance_correlation);
+        }
+      if (mlsoft_r2)
+        {
+          double r_2 = multilabel_soft_r2(ad_res); // r_2 score: best  is 1, min is 0
+          meas_out.add("r2",r_2);
+        }
+      if (mlsoft_deltas)
+        {
+          std::vector<double> delta_scores {0,0,0,0}; // delta-score , aka 1 if pred \in [truth-delta, truth+delta]
+          std::vector<double> deltas {0.05, 0.1, 0.2, 0.5};
+          multilabel_soft_deltas(ad_res, delta_scores, deltas);
+          for (unsigned int i=0; i<deltas.size(); ++i)
+            {
+              std::ostringstream sstr;
+              sstr << "delta_score_" << deltas[i];
+              meas_out.add(sstr.str(),delta_scores[i]);
+            }
+        }
+
+	  if (!multilabel && !segmentation && bf1)
 	    {
 	      double f1,precision,recall,acc;
 	      dMat conf_diag,conf_matrix;
@@ -335,7 +622,7 @@ namespace dd
 		  meas_out.add("cmfull",cmdata);
 		}
 	    }
-	  if (bmcll)
+	  if (!multilabel && !segmentation && bmcll)
 	    {
 	      double mmcll = mcll(ad_res);
 	      meas_out.add("mcll",mmcll);
@@ -419,6 +706,382 @@ namespace dd
       return accs;
     }
 
+    static double acc_v(const APIData &ad, double &meanacc, double &meaniou, std::vector<double> &clacc)
+    {
+      int nclasses = ad.get("nclasses").get<int>();
+      int batch_size = ad.get("batch_size").get<int>();
+      std::vector<double> mean_acc(nclasses,0.0);
+      std::vector<double> mean_acc_bs(nclasses,0.0);
+      std::vector<double> mean_iou_bs(nclasses,0.0);
+      std::vector<double> mean_iou(nclasses,0.0);
+      double acc_v = 0.0;
+      meanacc = 0.0;
+      meaniou = 0.0;
+      for (int i=0;i<batch_size;i++)
+	{
+	  APIData bad = ad.getobj(std::to_string(i));
+	  std::vector<double> predictions = bad.get("pred").get<std::vector<double>>(); // all best-1
+	  std::vector<double> targets = bad.get("target").get<std::vector<double>>(); // all targets against best-1
+	  dVec dpred = dVec::Map(&predictions.at(0),predictions.size());
+	  dVec dtarg = dVec::Map(&targets.at(0),targets.size());
+	  dVec ddiff = dpred - dtarg;
+	  double acc = (ddiff.cwiseAbs().array() == 0).count() / static_cast<double>(dpred.size());
+	  acc_v += acc;
+	  
+	  for (int c=0;c<nclasses;c++)
+	    {
+	      dVec dpredc = (dpred.array() == c).select(dpred,dVec::Constant(dpred.size(),-2.0));
+	      dVec dtargc = (dtarg.array() == c).select(dtarg,dVec::Constant(dtarg.size(),-1.0));
+	      dVec ddiffc = dpredc - dtargc;
+	      double c_sum = (ddiffc.cwiseAbs().array() == 0).count();
+
+	      // mean acc over classes
+	      double c_total_targ = static_cast<double>((dtarg.array() == c).count());
+	      if (c_sum == 0 || c_total_targ == 0)
+		{}
+	      else
+		{
+		  double accc = c_sum / c_total_targ;
+		  mean_acc[c] += accc;
+		  mean_acc_bs[c]++;
+
+        }
+
+           // mean intersection over union
+	      double c_false_neg = static_cast<double>((ddiffc.array() == -2-c).count());
+	      double c_false_pos = static_cast<double>((ddiffc.array() == c+1).count());
+          // below corner case where nothing is to predict : put correct to zero
+          // but do not devide by zero
+          double iou =  (c_sum == 0)? 0 : c_sum / (c_false_pos + c_sum + c_false_neg);
+	      mean_iou[c] += iou;
+          // ... and divide one time less when normalizing by batch size
+          if (c_total_targ !=0)
+            mean_iou_bs[c]++;
+          // another possible waywould be to put artificially iou to one if nothing is to be
+          // predicted for class c
+
+	    }
+	}
+      int c_nclasses = 0;
+      for (int c=0;c<nclasses;c++)
+	{
+	  if (mean_acc_bs[c] > 0.0)
+	    {
+	      mean_acc[c] /= mean_acc_bs[c];
+	      mean_iou[c] /= mean_iou_bs[c];
+	      c_nclasses++;
+	    }
+	  meanacc += mean_acc[c];
+	  meaniou += mean_iou[c];
+	}
+      clacc = mean_acc;
+      // corner case where prediction is wrong
+      if (c_nclasses > 0) {
+        meanacc /= static_cast<double>(c_nclasses);
+        meaniou /= static_cast<double>(c_nclasses);
+      }
+      return acc_v / static_cast<double>(batch_size);
+    }
+
+    // multilabel measures
+    static double multilabel_acc(const APIData &ad, double &sensitivity, double &specificity,
+				 double &harmmean, double &precision, double &f1)
+    {
+      int batch_size = ad.get("batch_size").get<int>();
+      double tp = 0.0;
+      double fp = 0.0;
+      double tn = 0.0;
+      double fn = 0.0;
+      double count_pos = 0.0;
+      double count_neg = 0.0;
+      for (int i=0;i<batch_size;i++)
+	{
+	  APIData bad = ad.getobj(std::to_string(i));
+	  std::vector<double> targets = bad.get("target").get<std::vector<double>>();
+	  std::vector<double> predictions = bad.get("pred").get<std::vector<double>>();
+	  for (size_t j=0;j<predictions.size();j++)
+	    {
+	      if (targets.at(j) < 0)
+		continue;
+	      if (targets.at(j) >= 0.5)
+		{
+		  // positive accuracy
+		  if (predictions.at(j) >= 0)
+		    ++tp;
+		  else ++fn;
+		  ++count_pos;
+		}
+	      else
+		{
+		  // negative accuracy
+		  if (predictions.at(j) < 0)
+		    ++tn;
+		  else ++fp;
+		  ++count_neg;
+		}
+	    }
+	}
+      sensitivity = (count_pos > 0) ? tp / count_pos : 0.0;
+      specificity = (count_neg > 0) ? tn / count_neg : 0.0;
+      harmmean = ((count_pos + count_neg > 0)) ?
+	2 / (count_pos / tp + count_neg / tn) : 0.0;
+      precision = (tp > 0) ? (tp / (tp + fp)): 0.0;
+      f1 = (tp > 0) ? 2 * tp / (2 * tp + fp + fn): 0.0;
+      return f1;
+    }
+
+    static double multilabel_soft_kl(const APIData &ad)
+    {
+      double kl_divergence = 0;
+      long int total_number = 0;
+      int batch_size = ad.get("batch_size").get<int>();
+      for (int i=0;i<batch_size;i++)
+        {
+          APIData bad = ad.getobj(std::to_string(i));
+          std::vector<double> targets = bad.get("target").get<std::vector<double>>();
+          std::vector<double> predictions = bad.get("pred").get<std::vector<double>>();
+          for (size_t j=0;j<predictions.size();j++)
+            {
+              if (targets[j] < 0) // case ignore_label
+                continue;
+              total_number++;
+              double eps = 0.00001;
+              double tval = (targets[j]< eps)? eps: targets[j];
+              double pval = (predictions[j]< eps)? eps: predictions[j];
+              kl_divergence += tval * log (tval/pval);
+            }
+        }
+      return kl_divergence / (double)total_number;
+    }
+
+    static double multilabel_soft_js(const APIData &ad)
+    {
+      int batch_size = ad.get("batch_size").get<int>();
+      double js_divergence = 0;
+      long int total_number = 0;
+      for (int i=0;i<batch_size;i++)
+        {
+          APIData bad = ad.getobj(std::to_string(i));
+          std::vector<double> targets = bad.get("target").get<std::vector<double>>();
+          std::vector<double> predictions = bad.get("pred").get<std::vector<double>>();
+          for (size_t j=0;j<predictions.size();j++)
+            {
+              if (targets[j] < 0) // case ignore_label
+                continue;
+              total_number++;
+              double eps = 0.00001;
+              double tval = (targets[j]< eps)? eps: targets[j];
+              double pval = (predictions[j]< eps)? eps: predictions[j];
+              js_divergence += 0.5 * (tval * log(2*tval/(tval+pval))) + 0.5 * (pval * log(2*pval/(tval+pval)));
+            }
+        }
+      return js_divergence / (double)total_number;
+    }
+
+    static double multilabel_soft_was(const APIData &ad)
+    {
+      int batch_size = ad.get("batch_size").get<int>();
+      double was = 0;
+      long int total_number = 0;
+      for (int i=0;i<batch_size;i++)
+        {
+          APIData bad = ad.getobj(std::to_string(i));
+          std::vector<double> targets = bad.get("target").get<std::vector<double>>();
+          std::vector<double> predictions = bad.get("pred").get<std::vector<double>>();
+          for (size_t j=0;j<predictions.size();j++)
+            {
+              if (targets[j] < 0) // case ignore_label
+                continue;
+              total_number++;
+              double dif = targets[j] - predictions[j];
+              was += dif*dif;
+            }
+        }
+      was = sqrt(was);
+      return was/sqrt((double)total_number);
+    }
+
+    static double multilabel_soft_ks(const APIData &ad)
+    {
+      int batch_size = ad.get("batch_size").get<int>();
+      double ks = 0;
+      long int total_number = 0;
+      for (int i=0;i<batch_size;i++)
+        {
+          APIData bad = ad.getobj(std::to_string(i));
+          std::vector<double> targets = bad.get("target").get<std::vector<double>>();
+          std::vector<double> predictions = bad.get("pred").get<std::vector<double>>();
+          for (size_t j=0;j<predictions.size();j++)
+            {
+              if (targets[j] < 0) // case ignore_label
+                continue;
+              total_number++;
+              double dif = targets[j] - predictions[j];
+              dif = fabs(dif);
+              if (dif > ks)
+                ks = dif;
+            }
+        }
+      return ks;
+    }
+
+    static int dc_pt_jk(const long int j, const long int k, const std::vector<double> &targets, const std::vector<double> & predictions, double& p_jk, double &t_jk )
+    {
+      if (targets[j] < 0 || targets[k] < 0)
+        {
+          p_jk = 0;
+          t_jk = 0;
+          return 0;
+        }
+      p_jk = fabs(predictions[j]-predictions[k]);
+      t_jk = fabs(targets[j]-targets[k]);
+      return 1;
+    }
+
+    static double multilabel_soft_dc(const APIData &ad)
+    {
+      int batch_size = ad.get("batch_size").get<int>();
+      int nclasses = ad.getobj(std::to_string(0)).get("target").get<std::vector<double>>().size();
+
+      double distance_correlation = 0;
+
+      std::vector<double> t_j(nclasses,0);
+      std::vector<double> p_j(nclasses,0);
+      double t_ = 0;
+      double p_ = 0;
+
+      double dcov = 0;
+      double dvart = 0;
+      double dvarp = 0;
+      std::vector<int> care_classes;
+
+      for (int i =0; i< batch_size; ++i) {
+        APIData badj = ad.getobj(std::to_string(i));
+        std::vector<double> targets = badj.get("target").get<std::vector<double>>();
+        std::vector<double> predictions = badj.get("pred").get<std::vector<double>>();
+
+        care_classes.clear();
+        for (int l =0; l<nclasses; ++l)
+          if (targets[l] >= 0)
+            care_classes.push_back(l);
+
+        if (care_classes.size() == 0)
+          continue;
+
+        for (int l : care_classes) {
+          for (int m : care_classes) {
+            double t_lm;
+            double p_lm;
+            dc_pt_jk(l,m, targets, predictions, p_lm, t_lm);
+            t_j[l] += t_lm;
+            p_j[l] += p_lm;
+          }
+          t_j[l] /= (double)care_classes.size();
+          t_ += t_j[l];
+          p_j[l] /= (double)care_classes.size();
+          p_ += p_j[l];
+        }
+        t_ /= (double) care_classes.size();
+        p_ /= (double) care_classes.size();
+
+        for (int j : care_classes)
+          {
+            for (int k : care_classes)
+              {
+                double p_jk;
+                double t_jk;
+                dc_pt_jk(j,k, targets, predictions, p_jk, t_jk);
+                double p = p_jk - p_j[j] - p_j[k] + p_;
+                double t = t_jk - t_j[j] - t_j[k] + t_;
+                dcov += p*t;
+                dvart += t*t;
+                dvarp += p*p;
+              }
+          }
+        dcov /= care_classes.size() * care_classes.size();
+        dvart /= care_classes.size()* care_classes.size();
+        dvarp /= care_classes.size() * care_classes.size();
+        dcov = sqrt(dcov);
+        dvart = sqrt(dvart);
+
+        dvarp = sqrt(dvarp);
+
+        if (dvart != 0 && dvarp !=0)
+          distance_correlation += dcov / (sqrt(dvart * dvarp));
+      }
+      distance_correlation /= batch_size;
+      return distance_correlation;
+    }
+
+    static double multilabel_soft_r2(const APIData &ad)
+    {
+      int batch_size = ad.get("batch_size").get<int>();
+      double tmean = 0;
+      long int total_number = 0;
+      double ssres = 0;
+      for (int i=0;i<batch_size;i++)
+        {
+          APIData bad = ad.getobj(std::to_string(i));
+          std::vector<double> targets = bad.get("target").get<std::vector<double>>();
+          std::vector<double> predictions = bad.get("pred").get<std::vector<double>>();
+          for (size_t j=0;j<predictions.size();j++)
+            {
+              if (targets[j] < 0) // case ignore_label
+                continue;
+              total_number++;
+              tmean += targets[j];
+              double dif = targets[j] - predictions[j];
+              ssres += dif*dif;
+
+            }
+        }
+      tmean /= (double)total_number;
+
+      double sstot = 0;
+
+      for (int i=0;i<batch_size;i++)
+        {
+          APIData bad = ad.getobj(std::to_string(i));
+          std::vector<double> targets = bad.get("target").get<std::vector<double>>();
+          std::vector<double> predictions = bad.get("pred").get<std::vector<double>>();
+          for (size_t j=0;j<predictions.size();j++)
+            {
+              if (targets[j] < 0)
+                continue;
+              sstot += (targets[j] - tmean) *  (targets[j] - tmean);
+            }
+        }
+      return  1.0 - ssres/sstot;
+    }
+
+    static void multilabel_soft_deltas(const APIData &ad, std::vector<double>& delta_scores, const std::vector<double>& deltas)
+    {
+      int batch_size = ad.get("batch_size").get<int>();
+      long int total_number = 0;
+      for (unsigned int k =0; k<deltas.size(); ++k)
+        delta_scores[k] = 0;
+      for (int i=0;i<batch_size;i++)
+        {
+          APIData bad = ad.getobj(std::to_string(i));
+          std::vector<double> targets = bad.get("target").get<std::vector<double>>();
+          std::vector<double> predictions = bad.get("pred").get<std::vector<double>>();
+          for (size_t j=0;j<predictions.size();j++)
+            {
+              if (targets[j] < 0) // case ignore_label
+                continue;
+              total_number++;
+              double dif = fabs(targets[j] - predictions[j]);
+              for (unsigned int k=0; k<deltas.size(); ++k)
+                if (dif < deltas[k])
+                  delta_scores[k]++;
+            }
+        }
+      for (unsigned int k =0; k<deltas.size(); ++k)
+        delta_scores[k] /=  (double)total_number; // gives proportion of good in 0:1 at every threshold
+
+    }
+
+
     // measure: F1
     static double mf1(const APIData &ad, double &precision, double &recall, double &acc, dMat &conf_diag, dMat &conf_matrix)
     {
@@ -436,7 +1099,7 @@ namespace dd
 	    throw OutputConnectorBadParamException("negative supervised discrete target (e.g. wrong use of label_offset ?");
 	  else if (target >= nclasses)
 	    throw OutputConnectorBadParamException("target class has id " + std::to_string(target) + " is higher than the number of classes " + std::to_string(nclasses) + " (e.g. wrong number of classes specified with nclasses");
-	  conf_matrix(maxpr,target) += 1.0;
+	  conf_matrix(maxpr,static_cast<int>(target)) += 1.0;
 	}
       conf_diag = conf_matrix.diagonal();
       dMat conf_csum = conf_matrix.colwise().sum();
@@ -536,7 +1199,7 @@ namespace dd
 	    throw OutputConnectorBadParamException("negative supervised discrete target (e.g. wrong use of label_offset ?");
 	  else if (target >= nclasses)
 	    throw OutputConnectorBadParamException("target class has id " + std::to_string(target) + " is higher than the number of classes " + std::to_string(nclasses) + " (e.g. wrong number of classes specified with nclasses");
-	  conf_matrix(maxpr,target) += 1.0;
+	  conf_matrix(maxpr,static_cast<int>(target)) += 1.0;
 	}
       double tp = conf_matrix(0,0);
       double tn = conf_matrix(1,1);
@@ -562,7 +1225,8 @@ namespace dd
 	    target = bad.get("target").get<std::vector<double>>();
 	  else target.push_back(bad.get("target").get<double>());
 	  for (size_t i=0;i<target.size();i++)
-	    eucl += (predictions.at(i)-target.at(i))*(predictions.at(i)-target.at(i));
+        if (target.at(i) >=0)
+          eucl += (predictions.at(i)-target.at(i))*(predictions.at(i)-target.at(i));
 	}
 	return eucl / static_cast<double>(batch_size);
     }
@@ -633,25 +1297,39 @@ namespace dd
     /**
      * \brief write supervised output object to data object
      * @param out data destination
+     * @param regression whether a regression task
+     * @param autoencoder whether an autoencoder architecture
+     * @param has_bbox whether an object detection task
+     * @param has_roi whether using feature extraction and object detection
+     * @param indexed_uris list of indexed uris, if any
      */
-    void to_ad(APIData &out, const bool &regression, const bool &autoencoder) const
+    void to_ad(APIData &out, const bool &regression, const bool &autoencoder,
+	       const bool &has_bbox, const bool &has_roi,
+	       const std::unordered_set<std::string> &indexed_uris) const
     {
+#ifndef USE_SIMSEARCH
+      (void)indexed_uris;
+#endif
       static std::string cl = "classes";
       static std::string ve = "vector";
       static std::string ae = "losses";
       static std::string bb = "bbox";
+      static std::string roi = "vals";
+      static std::string rois = "rois";
+
       static std::string phead = "prob";
       static std::string chead = "cat";
       static std::string vhead = "val";
       static std::string ahead = "loss";
       static std::string last = "last";
+      std::unordered_set<std::string>::const_iterator hit;
       std::vector<APIData> vpred;
       for (size_t i=0;i<_vvcats.size();i++)
 	{
 	  APIData adpred;
 	  std::vector<APIData> v;
-	  auto bit = _vvcats.at(i)._extra.begin();
-	  bool has_bbox = (bit!=_vvcats.at(i)._extra.end());
+	  auto bit = _vvcats.at(i)._bboxes.begin();
+	  auto vit = _vvcats.at(i)._vals.begin();
 	  auto mit = _vvcats.at(i)._cats.begin();
 	  while(mit!=_vvcats.at(i)._cats.end())
 	    {
@@ -663,24 +1341,80 @@ namespace dd
 	      else if (autoencoder)
 		nad.add(ahead,(*mit).first);
 	      else nad.add(phead,(*mit).first);
-	      if (has_bbox)
+	      if (has_bbox || has_roi)
 		{
 		  nad.add(bb,(*bit).second);
 		  ++bit;
+		}
+	      if (has_roi)
+		{
+		  /* std::vector<std::string> keys = (*vit).second.list_keys(); */
+		  /* std::copy(keys.begin(), keys.end(), std::ostream_iterator<std::string>(std::cout, "'")); */
+		  /* std::cout << std::endl; */
+		  nad.add(roi,(*vit).second.get("vals").get<std::vector<double>>());
+		  ++vit;
 		}
 	      ++mit;
 	      if (mit == _vvcats.at(i)._cats.end())
 		nad.add(last,true);
 	      v.push_back(nad);
 	    }
+	  if (_vvcats.at(i)._loss > 0.0) // XXX: not set by Caffe in prediction mode for now
+	    adpred.add("loss",_vvcats.at(i)._loss);
+	  adpred.add("uri",_vvcats.at(i)._label);
+#ifdef USE_SIMSEARCH
+	  if (!indexed_uris.empty() && (hit=indexed_uris.find(_vvcats.at(i)._label))!=indexed_uris.end())
+	    adpred.add("indexed",true);
+	  if (!_vvcats.at(i)._nns.empty() || !_vvcats.at(i)._bbox_nns.empty())
+	    {
+	      if (!has_roi)
+		{
+		  std::vector<APIData> ad_nns;
+		  auto nnit = _vvcats.at(i)._nns.begin();
+		  while(nnit!=_vvcats.at(i)._nns.end())
+		    {
+		      APIData ad_nn;
+		      ad_nn.add("uri",(*nnit).second._uri);
+		      ad_nn.add("dist",(*nnit).first);
+		      ad_nns.push_back(ad_nn);
+		      ++nnit;
+		    }
+		  adpred.add("nns",ad_nns);
+		}
+	      else // has_roi
+		{
+		  for (size_t bb=0;bb<_vvcats.at(i)._bbox_nns.size();bb++)
+		    {
+		      std::vector<APIData> ad_nns;
+		      auto nnit = _vvcats.at(i)._bbox_nns.at(bb).begin();
+		      while(nnit!=_vvcats.at(i)._bbox_nns.at(bb).end())
+			{
+			  APIData ad_nn;
+			  ad_nn.add("uri",(*nnit).second._uri);
+			  ad_nn.add("dist",(*nnit).first);
+			  ad_nn.add("prob",(*nnit).second._prob);
+			  ad_nn.add("cat",(*nnit).second._cat);
+			  APIData ad_bbox;
+			  ad_bbox.add("xmin",(*nnit).second._bbox.at(0));
+			  ad_bbox.add("ymin",(*nnit).second._bbox.at(1));
+			  ad_bbox.add("xmax",(*nnit).second._bbox.at(2));
+			  ad_bbox.add("ymax",(*nnit).second._bbox.at(3));
+			  ad_nn.add("bbox",ad_bbox);
+			  ad_nns.push_back(ad_nn);
+			  ++nnit;
+			}
+		      v.at(bb).add("nns",ad_nns); // v is in roi object vector
+		    }
+		}
+	    }
+#endif
 	  if (regression)
 	    adpred.add(ve,v);
 	  else if (autoencoder)
 	    adpred.add(ae,v);
+	  else if (has_roi)
+	    adpred.add(rois,v);
 	  else adpred.add(cl,v);
-	  if (_vvcats.at(i)._loss > 0.0) // XXX: not set by Caffe in prediction mode for now
-	    adpred.add("loss",_vvcats.at(i)._loss);
-	  adpred.add("uri",_vvcats.at(i)._label);
 	  vpred.push_back(adpred);
 	}
       out.add("predictions",vpred);
@@ -691,6 +1425,9 @@ namespace dd
     
     // options
     int _best = 1;
+#ifdef USE_SIMSEARCH
+    int _search_nn = 10; /**< default nearest neighbors per search. */
+#endif
   };
   
 }

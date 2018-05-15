@@ -40,7 +40,7 @@ namespace dd
   public:
     CaffeInputInterface() {}
     CaffeInputInterface(const CaffeInputInterface &cii)
-      :_dv(cii._dv),_dv_test(cii._dv_test),_ids(cii._ids),_flat1dconv(cii._flat1dconv),_has_mean_file(cii._has_mean_file),_mean_values(cii._mean_values),_sparse(cii._sparse) {}
+      :_dv(cii._dv),_dv_test(cii._dv_test),_ids(cii._ids),_flat1dconv(cii._flat1dconv),_has_mean_file(cii._has_mean_file),_mean_values(cii._mean_values),_sparse(cii._sparse),_embed(cii._embed),_sequence_txt(cii._sequence_txt),_max_embed_id(cii._max_embed_id),_segmentation(cii._segmentation),_multi_label(cii._multi_label),_root_folder(cii._root_folder) {}
     ~CaffeInputInterface() {}
 
     /**
@@ -79,6 +79,12 @@ namespace dd
     bool _has_mean_file = false; /**< image model mean.binaryproto. */
     std::vector<float> _mean_values; /**< mean image values across a dataset. */
     bool _sparse = false; /**< whether to use sparse representation. */
+    bool _embed = false; /**< whether model is using an input embedding layer. */
+    int _sequence_txt = -1; /**< sequence of txt input connector. */
+    int _max_embed_id = -1; /**< in embeddings, the max index. */
+    bool _segmentation = false; /**< whether it is a segmentation service. */
+    bool _multi_label = false; /**< multi label setup */
+    std::string _root_folder; /**< root folder for image list layer. */
     std::unordered_map<std::string,std::pair<int,int>> _imgs_size; /**< image sizes, used in detection. */
     std::string _dbfullname = "train.lmdb";
     std::string _test_dbfullname = "test.lmdb";
@@ -92,11 +98,10 @@ namespace dd
   public:
     ImgCaffeInputFileConn()
       :ImgInputFileConn() {
-      _db = true;
       reset_dv_test();
     }
     ImgCaffeInputFileConn(const ImgCaffeInputFileConn &i)
-      :ImgInputFileConn(i),CaffeInputInterface(i) { _db = true; }
+      :ImgInputFileConn(i),CaffeInputInterface(i) {/* _db = true;*/ }
     ~ImgCaffeInputFileConn() {}
 
     // size of each element in Caffe jargon
@@ -114,6 +119,7 @@ namespace dd
     int width() const
     {
       return _width;
+
     }
 
     int batch_size() const
@@ -137,6 +143,14 @@ namespace dd
     void init(const APIData &ad)
     {
       ImgInputFileConn::init(ad);
+      if (ad.has("db"))
+	_db = ad.get("db").get<bool>();
+      if (ad.has("multi_label"))
+	_multi_label = ad.get("multi_label").get<bool>();
+      if (ad.has("root_folder"))
+	_root_folder = ad.get("root_folder").get<std::string>();
+      if (ad.has("segmentation"))
+	_segmentation = ad.get("segmentation").get<bool>();
     }
 
     void transform(const APIData &ad)
@@ -152,6 +166,13 @@ namespace dd
 	  
 	  if (ad.has("has_mean_file"))
 	    _has_mean_file = ad.get("has_mean_file").get<bool>();
+	  APIData ad_input = ad.getobj("parameters").getobj("input");
+	  if (ad_input.has("segmentation"))
+	    _segmentation = ad_input.get("segmentation").get<bool>();
+	  if (ad_input.has("multi_label"))
+	    _multi_label = ad_input.get("multi_label").get<bool>();
+	  if (ad.has("root_folder"))
+	    _root_folder = ad.get("root_folder").get<std::string>();
 	  try
 	    {
 	      ImgInputFileConn::transform(ad);
@@ -217,59 +238,109 @@ namespace dd
 	  this->_images.clear();
 	  this->_images_size.clear();
 	}
-      else // more complicated, since images can be heavy, a db is built so that it is less costly to iterate than the filesystem
+      else
 	{
-	  _dbfullname = _model_repo + "/" + _dbfullname;
-	  _test_dbfullname = _model_repo + "/" + _test_dbfullname;
-	  try
-	    {
-	      get_data(ad);
-	    }
-	  catch(InputConnectorBadParamException &ex) // in case the db is in the net config
-	    {
-	      // API defines no data as a user error (bad param).
-	      // However, Caffe does allow to specify the input database into the net's definition,
-	      // which makes it difficult to enforce the API here.
-	      // So for now, this check is kept disabled.
-	      /*if (!fileops::file_exists(_model_repo + "/" + _dbname))
-		throw ex;*/
-	      return;
-	    }
+	  _shuffle = true;
 	  APIData ad_mllib;
 	  if (ad.has("parameters")) // hotplug of parameters, overriding the defaults
 	    {
 	      APIData ad_param = ad.getobj("parameters");
 	      if (ad_param.has("input"))
 		{
+		  APIData ad_input = ad_param.getobj("input");
 		  fillup_parameters(ad_param.getobj("input"));
+		  if (ad_input.has("db"))
+		    _db = ad_input.get("db").get<bool>();
+		  if (ad_input.has("segmentation"))
+		    _segmentation = ad_input.get("segmentation").get<bool>();
+		  if (ad_input.has("multi_label"))
+		    _multi_label = ad_input.get("multi_label").get<bool>();
+		  if (ad_input.has("root_folder"))
+		    _root_folder = ad_input.get("root_folder").get<std::string>();
 		}
 	      ad_mllib = ad_param.getobj("mllib");
 	    }
-	  
-	  // create db
-	  images_to_db(_uris,_model_repo + "/" + _dbname,_model_repo + "/" + _test_dbname);
-	  
-	  // compute mean of images, not forcely used, depends on net, see has_mean_file
-	  compute_images_mean(_model_repo + "/" + _dbname,
-			      _model_repo + "/" + _meanfname);
 
-	  // class weights if any
-	  write_class_weights(_model_repo,ad_mllib);
-	  
-	  // enrich data object with db files location
-	  APIData dbad;
-	  dbad.add("train_db",_dbfullname);
-	  if (_test_split > 0.0)
-	    dbad.add("test_db",_test_dbfullname);
-	  dbad.add("meanfile",_model_repo + "/" + _meanfname);
-	  const_cast<APIData&>(ad).add("db",dbad);
+	  if (_segmentation)
+	    {
+	      try
+		{
+		  get_data(ad);
+		}
+	      catch(InputConnectorBadParamException &ex)
+		{
+		  throw ex;
+		}
+	      if (!fileops::file_exists(_uris.at(0)))
+		throw InputConnectorBadParamException("input train file " + _uris.at(0) + " not found");
+	      if (_uris.size() > 1)
+		{
+		  if (!fileops::file_exists(_uris.at(1)))
+		    throw InputConnectorBadParamException("input test file " + _uris.at(1) + " not found");
+		}
+
+	      // class weights if any
+	      write_class_weights(_model_repo,ad_mllib);
+	      
+	      //TODO: if test split (+ optional shuffle)
+	      APIData sourcead;
+	      sourcead.add("source_train",_uris.at(0));
+	      if (_uris.size() > 1)
+            sourcead.add("source_test",_uris.at(1));
+	      const_cast<APIData&>(ad).add("source",sourcead);
+	    }
+	  else // more complicated, since images can be heavy, a db is built so that it is less costly to iterate than the filesystem, unless image data layer is used (e.g. multi-class image training)
+	    {
+	      _dbfullname = _model_repo + "/" + _dbfullname;
+	      _test_dbfullname = _model_repo + "/" + _test_dbfullname;
+	      try
+		{
+		  get_data(ad);
+		}
+	      catch(InputConnectorBadParamException &ex) // in case the db is in the net config
+		{
+		  // API defines no data as a user error (bad param).
+		  // However, Caffe does allow to specify the input database into the net's definition,
+		  // which makes it difficult to enforce the API here.
+		  // So for now, this check is kept disabled.
+		  /*if (!fileops::file_exists(_model_repo + "/" + _dbname))
+		    throw ex;*/
+		  return;
+		}
+	      if (!this->_db) {
+		// create test db for image data layer (no db of images)
+		create_test_db_for_imagedatalayer(_uris.at(1),_model_repo + "/" +_test_dbname);
+		return;
+	      }
+	      // create db
+	      images_to_db(_uris,_model_repo + "/" + _dbname,_model_repo + "/" + _test_dbname);
+	      
+	      // compute mean of images, not forcely used, depends on net, see has_mean_file
+	      compute_images_mean(_model_repo + "/" + _dbname,
+				  _model_repo + "/" + _meanfname);
+	      
+	      // class weights if any
+	      write_class_weights(_model_repo,ad_mllib);
+	      
+	      // enrich data object with db files location
+	      APIData dbad;
+	      dbad.add("train_db",_dbfullname);
+	      if (_test_split > 0.0)
+		dbad.add("test_db",_test_dbfullname);
+	      dbad.add("meanfile",_model_repo + "/" + _meanfname);
+	      const_cast<APIData&>(ad).add("db",dbad);
+	    }
 	}
     }
 
     std::vector<caffe::Datum> get_dv_test(const int &num,
 					  const bool &has_mean_file)
       {
-	if (!_train && _db_fname.empty())
+        if (_segmentation && _train)
+	  {
+	    return get_dv_test_segmentation(num,has_mean_file);
+	  }
+	else if (!_train && _db_fname.empty())
 	  {
 	    int i = 0;
 	    std::vector<caffe::Datum> dv;
@@ -288,12 +359,22 @@ namespace dd
     std::vector<caffe::Datum> get_dv_test_db(const int &num,
 					     const bool &has_mean_file);
 
+    std::vector<caffe::Datum> get_dv_test_segmentation(const int &num,
+						       const bool &has_mean_file);
+    
     void reset_dv_test();
     
   private:
+
+    void create_test_db_for_imagedatalayer(const std::string &test_lst,
+                                           const std::string &testdbname,
+                                           const std::string &backend="lmdb", // lmdb, leveldb
+                                           const bool &encoded=true, // save the encoded image in datum
+                                           const std::string &encode_type=""); // 'png', 'jpg', ...
+
     int images_to_db(const std::vector<std::string> &rfolders,
 		     const std::string &traindbname,
-		     const std::string &testdbname,
+                     const std::string &testdbname,
 		     const std::string &backend="lmdb", // lmdb, leveldb
 		     const bool &encoded=true, // save the encoded image in datum
 		     const std::string &encode_type=""); // 'png', 'jpg', ...
@@ -303,11 +384,19 @@ namespace dd
 			   const std::string &backend,
 			   const bool &encoded,
 			   const std::string &encode_type);
+
+    void write_image_to_db_multilabel(const std::string &dbfullname,
+				      const std::vector<std::pair<std::string,std::vector<float>>> &lfiles,
+				      const std::string &backend,
+				      const bool &encoded,
+				      const std::string &encode_type);
     
     int compute_images_mean(const std::string &dbname,
 			    const std::string &meanfile,
 			    const std::string &backend="lmdb");
 
+    std::string guess_encoding(const std::string &file);
+    
   public:
     int _db_batchsize = -1;
     int _db_testbatchsize = -1;
@@ -319,6 +408,8 @@ namespace dd
     std::string _correspname = "corresp.txt";
     caffe::Blob<float> _data_mean; // mean binary image if available.
     std::vector<caffe::Datum>::const_iterator _dt_vit;
+    std::vector<std::pair<std::string,std::string>> _segmentation_data_lines;
+    int _dt_seg = 0;
   };
 
   /**
@@ -342,6 +433,7 @@ namespace dd
     
     CSVCaffeInputFileConn *_cifc = nullptr;
     APIData _adconf;
+    std::shared_ptr<spdlog::logger> _logger;
   };
   
   class CSVCaffeInputFileConn : public CSVInputFileConn, public CaffeInputInterface
@@ -606,12 +698,22 @@ namespace dd
 	_flat1dconv = true;
       if (ad.has("sparse") && ad.get("sparse").get<bool>())
 	_sparse = true;
+      if (ad.has("embedding") && ad.get("embedding").get<bool>())
+	_embed = true;
+      _sequence_txt = _sequence;
+      _max_embed_id = _alphabet.size() + 1; // +1 as offset to null index
     }
 
     int channels() const
     {
       if (_characters)
 	return 1;
+      if (_embed)
+	{
+	  if (!_characters)
+	    return _sequence;
+	  else return 1;
+	}
       if (_channels > 0)
 	return _channels;
       return feature_size();
@@ -626,7 +728,7 @@ namespace dd
 
     int width() const
     {
-      if (_characters)
+      if (_characters && !_embed)
 	return _alphabet.size();
       return 1;
     }
@@ -651,7 +753,6 @@ namespace dd
     
     int txt_to_db(const std::string &traindbname,
 		  const std::string &testdbname,
-		  const APIData &ad_input,
 		  const std::string &backend="lmdb");
 
     void write_txt_to_db(const std::string &dbname,
@@ -669,6 +770,10 @@ namespace dd
       APIData ad_mllib = ad_param.getobj("mllib");
       if (ad_input.has("db") && ad_input.get("db").get<bool>())
 	_db = true;
+      if (ad_input.has("embedding") && ad_input.get("embedding").get<bool>())
+	{
+	  _embed = true;
+	}
       
       // transform to one-hot vector datum
       if (_train && _db)
@@ -678,8 +783,7 @@ namespace dd
 	  //std::string dbfullname = _model_repo + "/" + _dbname + ".lmdb";
 	  if (!fileops::file_exists(_dbfullname)) // if no existing db, preprocess from txt files
 	    TxtInputFileConn::transform(ad);
-	  txt_to_db(_model_repo + "/" + _dbname,_model_repo + "/" + _test_dbname,
-		    ad_input);
+	  txt_to_db(_model_repo + "/" + _dbname,_model_repo + "/" + _test_dbname);
 	  write_class_weights(_model_repo,ad_mllib);
 
 	  
@@ -810,6 +914,8 @@ namespace dd
 	int datum_channels;
 	if (_characters)
 	  datum_channels = 1;
+	else if (_embed && !_characters)
+	  datum_channels = _sequence;
 	else datum_channels = _vocab.size(); // XXX: may be very large
 	datum.set_channels(datum_channels);
        	datum.set_height(1);
@@ -818,16 +924,37 @@ namespace dd
 	if (!_characters)
 	  {
 	    std::unordered_map<std::string,Word>::const_iterator wit;
-	    for (int i=0;i<datum_channels;i++) // XXX: expected to be slow
-	      datum.add_float_data(0.0);
-	    tbe->reset();
-	    while(tbe->has_elt())
+	    if (!_embed)
 	      {
-		std::string key;
-		double val;
-		tbe->get_next_elt(key,val);
-		if ((wit = _vocab.find(key))!=_vocab.end())
-		  datum.set_float_data(_vocab[key]._pos,static_cast<float>(val));
+		for (int i=0;i<datum_channels;i++) // XXX: expected to be slow
+		  datum.add_float_data(0.0);
+		tbe->reset();
+		while(tbe->has_elt())
+		  {
+		    std::string key;
+		    double val;
+		    tbe->get_next_elt(key,val);
+		    if ((wit = _vocab.find(key))!=_vocab.end())
+		      datum.set_float_data(_vocab[key]._pos,static_cast<float>(val));
+		  }
+	      }
+	    else
+	      {
+		tbe->reset();
+		int i = 0;
+		while(tbe->has_elt())
+		  {
+		    std::string key;
+		    double val;
+		    tbe->get_next_elt(key,val);
+		    if ((wit = _vocab.find(key))!=_vocab.end())
+		      datum.add_float_data(static_cast<float>(_vocab[key]._pos));
+		    ++i;
+		    if (i == _sequence) // tmp limit on sequence length
+		      break;
+		  }
+		while (datum.float_data_size() < _sequence)
+		  datum.add_float_data(0.0);
 	      }
 	  }
 	else // character-level features
@@ -847,16 +974,31 @@ namespace dd
 	      }
 	    /*if (vals.size() > _sequence)
 	      std::cerr << "more characters than sequence / " << vals.size() << " / sequence=" << _sequence << std::endl;*/
-	    for (int c=0;c<_sequence;c++)
+	    if (!_embed)
 	      {
-		std::vector<float> v(_alphabet.size(),0.0);
-		if (c<(int)vals.size() && vals[c] != -1)
-		  v[vals[c]] = 1.0;
-		for (float f: v)
-		  datum.add_float_data(f);
+		for (int c=0;c<_sequence;c++)
+		  {
+		    std::vector<float> v(_alphabet.size(),0.0);
+		    if (c<(int)vals.size() && vals[c] != -1)
+		      v[vals[c]] = 1.0;
+		    for (float f: v)
+		      datum.add_float_data(f);
+		  }
+		datum.set_height(_sequence);
+		datum.set_width(_alphabet.size());
 	      }
-	    datum.set_height(_sequence);
-	    datum.set_width(_alphabet.size());
+	    else
+	      {
+		for (int c=0;c<_sequence;c++)
+		  {
+		    double val = 0.0;
+		    if (c<(int)vals.size() && vals[c] != -1)
+		      val = static_cast<float>(vals[c]+1.0); // +1 as offset to null index
+		    datum.add_float_data(val);
+		  }
+		datum.set_height(_sequence);
+		datum.set_width(1);
+	      }
 	  }
 	return datum;
       }

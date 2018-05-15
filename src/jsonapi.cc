@@ -26,7 +26,6 @@
 #include "ext/rapidjson/stringbuffer.h"
 #include "ext/rapidjson/reader.h"
 #include "ext/rapidjson/writer.h"
-#include <glog/logging.h>
 
 namespace dd
 {
@@ -200,6 +199,24 @@ namespace dd
     render_status(jd,404,"Not Found",1009,"Output Connector Network Error");
     return jd;
   }
+
+#ifdef USE_SIMSEARCH
+  JDoc JsonAPI::dd_sim_index_error_1010() const
+  {
+    JDoc jd;
+    jd.SetObject();
+    render_status(jd,403,"Forbidden",1010,"Cannot index after similarity search tree has been built");
+    return jd;
+  }
+
+  JDoc JsonAPI::dd_sim_search_error_1011() const
+  {
+    JDoc jd;
+    jd.SetObject();
+    render_status(jd,403,"Forbidden",1011,"Cannot search before similarity search tree has been built");
+    return jd;
+  }
+#endif
   
   std::string JsonAPI::jrender(const JDoc &jst) const
   {
@@ -247,7 +264,7 @@ namespace dd
   {
     if (sname.empty())
       {
-	LOG(ERROR) << "missing service resource name: " << sname << std::endl;
+	_logger->error("missing service resource name: {}",sname);
 	return dd_not_found_404();
       }
 
@@ -255,7 +272,7 @@ namespace dd
     d.Parse(jstr.c_str());
     if (d.HasParseError())
       {
-	LOG(ERROR) << "JSON parsing error on string: " << jstr << std::endl;
+	_logger->error("JSON parsing error on string: {}",jstr);
 	return dd_bad_request_400();
       }
 
@@ -281,7 +298,7 @@ namespace dd
       }
     catch(RapidjsonException &e)
       {
-	LOG(ERROR) << "JSON error " << e.what() << std::endl;
+	_logger->error("JSON error {}",e.what());
 	return dd_bad_request_400();
       }
     catch(...)
@@ -307,7 +324,7 @@ namespace dd
 		  add_service(sname,std::move(MLService<CaffeLib,SVMCaffeInputFileConn,SupervisedOutput,CaffeModel>(sname,cmodel,description)),ad);
 		else return dd_input_connector_not_found_1004();
 		if (JsonAPI::store_json_blob(cmodel._repo,jstr)) // store successful call json blob
-		  LOG(ERROR) << "couldn't write " << JsonAPI::_json_blob_fname << " file in model repository " << cmodel._repo << std::endl;
+		  _logger->error("couldn't write {} file in model repository {}",JsonAPI::_json_blob_fname,cmodel._repo);
 	      }
 	    else if (type == "unsupervised")
 	      {
@@ -321,7 +338,7 @@ namespace dd
 		  add_service(sname,std::move(MLService<CaffeLib,SVMCaffeInputFileConn,UnsupervisedOutput,CaffeModel>(sname,cmodel,description)),ad);
 		else return dd_input_connector_not_found_1004();
 		if (JsonAPI::store_json_blob(cmodel._repo,jstr)) // store successful call json blob
-		  LOG(ERROR) << "couldn't write " << JsonAPI::_json_blob_fname << " file in model repository " << cmodel._repo << std::endl;
+		  _logger->error("couldn't write {} file in model repository {}",JsonAPI::_json_blob_fname,cmodel._repo);
 	      }
 	    else
 	      {
@@ -339,7 +356,7 @@ namespace dd
 		  add_service(sname,std::move(MLService<TFLib,ImgTFInputFileConn,SupervisedOutput,TFModel>(sname,tfmodel,description)),ad);
 		else return dd_input_connector_not_found_1004();
 		if (JsonAPI::store_json_blob(tfmodel._repo,jstr)) // store successful call json blob
-		  LOG(ERROR) << "couldn't write " << JsonAPI::_json_blob_fname << " file in model repository " << tfmodel._repo << std::endl;
+		  _logger->error("couldn't write {} file in model repository {}",JsonAPI::_json_blob_fname,tfmodel._repo);
 	      }
 	    else if (type == "unsupervised")
 	      {
@@ -347,7 +364,7 @@ namespace dd
 		  add_service(sname,std::move(MLService<TFLib,ImgTFInputFileConn,UnsupervisedOutput,TFModel>(sname,tfmodel,description)),ad);
 		else return dd_input_connector_not_found_1004();
 		if (JsonAPI::store_json_blob(tfmodel._repo,jstr)) // store successful call json blob
-		  LOG(ERROR) << "couldn't write " << JsonAPI::_json_blob_fname << " file in model repository " << tfmodel._repo << std::endl;
+		  _logger->error("couldn't write {} file in model repository {}",JsonAPI::_json_blob_fname,tfmodel._repo);
 	      }
 	    else
 	      {
@@ -368,7 +385,7 @@ namespace dd
 	      add_service(sname,std::move(MLService<XGBLib,TxtXGBInputFileConn,SupervisedOutput,XGBModel>(sname,xmodel,description)),ad);
 	    else return dd_input_connector_not_found_1004();
 	    if (JsonAPI::store_json_blob(xmodel._repo,jstr)) // store successful call json blob
-	      LOG(ERROR) << "couldn't write " << JsonAPI::_json_blob_fname << " file in model repository " << xmodel._repo << std::endl;
+	      _logger->error("couldn't write {} file in model repository {}",JsonAPI::_json_blob_fname,xmodel._repo);
 	  }
 #endif
 #ifdef USE_TSNE
@@ -377,9 +394,11 @@ namespace dd
 	    TSNEModel tmodel(ad_model);
 	    if (input == "csv")
 	      add_service(sname,std::move(MLService<TSNELib,CSVTSNEInputFileConn,UnsupervisedOutput,TSNEModel>(sname,tmodel,description)),ad);
+	    else if (input == "txt")
+	      add_service(sname,std::move(MLService<TSNELib,TxtTSNEInputFileConn,UnsupervisedOutput,TSNEModel>(sname,tmodel,description)),ad);
 	    else return dd_input_connector_not_found_1004();
 	    if (JsonAPI::store_json_blob(tmodel._repo,jstr)) // store successful call json blob
-	      LOG(ERROR) << "couldn't write " << JsonAPI::_json_blob_fname << " file in model repository " << tmodel._repo << std::endl; 
+	      _logger->error("couldn't write {} file in model repository {}",JsonAPI::_json_blob_fname,tmodel._repo);
 	  }
 #endif
 	else
@@ -442,7 +461,7 @@ namespace dd
 	d.Parse(jstr.c_str());
 	if (d.HasParseError())
 	  {
-	    LOG(ERROR) << "JSON parsing error on string: " << jstr << std::endl;
+	    _logger->error("JSON parsing error on string: {}",jstr);
 	    return dd_bad_request_400();
 	  }
       }
@@ -455,7 +474,7 @@ namespace dd
       }
     catch(RapidjsonException &e)
       {
-	LOG(ERROR) << "JSON error " << e.what() << std::endl;
+	_logger->error("JSON error {}",e.what());
 	return dd_bad_request_400();
       }
     catch(...)
@@ -485,7 +504,7 @@ namespace dd
     d.Parse(jstr.c_str());
     if (d.HasParseError())
       {
-	LOG(ERROR) << "JSON parsing error on string: " << jstr << std::endl;
+	_logger->error("JSON parsing error on string: {}",jstr);
 	return dd_bad_request_400();
       }
 
@@ -511,7 +530,7 @@ namespace dd
       }
     catch(RapidjsonException &e)
       {
-	LOG(ERROR) << "JSON error " << e.what() << std::endl;
+	_logger->error("JSON error {}",e.what());
 	return dd_bad_request_400();
       }
     catch(...)
@@ -545,6 +564,16 @@ namespace dd
       {
 	return dd_train_predict_conflict_1008();
       }
+#ifdef USE_SIMSEARCH
+    catch (SimIndexException &e)
+      {
+	return dd_sim_index_error_1010();
+      }
+    catch (SimSearchException &e)
+      {
+	return dd_sim_search_error_1011();
+      }
+#endif
     catch (std::exception &e)
       {
 	return dd_internal_mllib_error_1007(e.what());
@@ -592,7 +621,7 @@ namespace dd
     d.Parse(jstr.c_str());
     if (d.HasParseError())
       {
-	LOG(ERROR) << "JSON parsing error on string: " << jstr << std::endl;
+	_logger->error("JSON parsing error on string: {}",jstr);
 	return dd_bad_request_400();
       }
   
@@ -618,7 +647,7 @@ namespace dd
       }
     catch(RapidjsonException &e)
       {
-	LOG(ERROR) << "JSON error " << e.what() << std::endl;
+	_logger->error("JSON error {}",e.what());
 	return dd_bad_request_400();
       }
     catch(...)
@@ -634,7 +663,7 @@ namespace dd
 	this->train(ad,sname,out); // we ignore return status, stored in out data object
 	mrepo = out.getobj("model").get("repository").get<std::string>();
 	if (JsonAPI::store_json_blob(mrepo,jstr)) // store successful call json blob
-	  LOG(ERROR) << "couldn't write to" << JsonAPI::_json_blob_fname << " file in model repository " << mrepo << std::endl;
+	  _logger->error("couldn't write to {} file in model repository {}",JsonAPI::_json_blob_fname,mrepo);
       }
     catch (InputConnectorBadParamException &e)
       {
@@ -676,7 +705,7 @@ namespace dd
       }
     jtrain.AddMember("head",jhead,jtrain.GetAllocator());
     if (JsonAPI::store_json_blob(mrepo,jrender(jtrain))) // store successful call json blob
-      LOG(ERROR) << "couldn't write to " << JsonAPI::_json_blob_fname << " file in model repository " << mrepo << std::endl;
+      _logger->error("couldn't write to {} file in model repository {}",JsonAPI::_json_blob_fname,mrepo);
     return jtrain;
   }
 
@@ -686,7 +715,7 @@ namespace dd
     d.Parse(jstr.c_str());
     if (d.HasParseError())
       {
-	LOG(ERROR) << "JSON parsing error on string: " << jstr << std::endl;
+	_logger->error("JSON parsing error on string: {}",jstr);
 	return dd_bad_request_400();
       }
 
@@ -712,7 +741,7 @@ namespace dd
       }
     catch(RapidjsonException &e)
       {
-	LOG(ERROR) << "JSON error " << e.what() << std::endl;
+	_logger->error("JSON error {}",e.what());
 	return dd_bad_request_400();
       }
     catch(...)
@@ -749,7 +778,7 @@ namespace dd
       }
     catch(RapidjsonException &e)
       {
-	LOG(ERROR) << "JSON error " << e.what() << std::endl;
+	_logger->error("JSON error {}",e.what());
 	dout = dd_bad_request_400();
       }
     catch (std::exception &e)
@@ -784,7 +813,7 @@ namespace dd
     if (dout.HasMember("status"))
       {
 	jhead.AddMember("status",JVal().SetString("error",jtrain.GetAllocator()),jtrain.GetAllocator());
-	LOG(ERROR) << jrender(dout["status"]) << std::endl;
+	_logger->error(jrender(dout["status"]));
 	/*JVal &jvout = dout["status"];
 	  jout.AddMember("Error",jvout,jtrain.GetAllocator());*/ // XXX: beware, acquiring the status appears to lead to corrupted rapidjson strings
       }
@@ -794,7 +823,7 @@ namespace dd
       {
 	std::string mrepo = out.getobj("model").get("repository").get<std::string>();
 	if (JsonAPI::store_json_blob(mrepo,jrender(jtrain)))
-	LOG(ERROR) << "couldn't write to " << JsonAPI::_json_blob_fname << " file in model repository " << mrepo << std::endl;
+	  _logger->error("couldn't write to {} file in model repository {}",JsonAPI::_json_blob_fname,mrepo);
       }
     return jtrain;
   }
@@ -805,7 +834,7 @@ namespace dd
     d.Parse(jstr.c_str());
     if (d.HasParseError())
       {
-	LOG(ERROR) << "JSON parsing error on string: " << jstr << std::endl;
+	_logger->error("JSON parsing error on string: {}",jstr);
 	return dd_bad_request_400();
       }
   
@@ -831,7 +860,7 @@ namespace dd
       }
     catch(RapidjsonException &e)
       {
-	LOG(ERROR) << "JSON error " << e.what() << std::endl;
+	_logger->error("JSON error {}",e.what());
 	return dd_bad_request_400();
       }
     catch(...)

@@ -63,6 +63,8 @@ namespace dd
 	  activation = "Sigmoid";
 	else if (dd_utils::iequals(activation,"tanh"))
 	  activation = "TanH";
+	else if (dd_utils::iequals(activation,"swish"))
+	  activation = "Swish";
       }
     return activation;
   }
@@ -142,7 +144,7 @@ namespace dd
 	mdparam->set_height(height);
 	mdparam->set_width(width);
       }
-
+    
     lparam = CaffeCommon::add_layer(this->_net_params,"",top,"inputl",
 				    inputc._sparse ? "MemorySparseData" : "MemoryData",label); // test layer
     caffe::MemoryDataParameter *mdparam = lparam->mutable_memory_data_param();
@@ -181,6 +183,27 @@ namespace dd
 	sparam->set_slice_dim(1);
 	sparam->add_slice_point(1);
       }
+    if (inputc._embed)
+      {
+	/*lparam = CaffeCommon::add_layer(this->_net_params,top,"embed");
+	  lparam->set_type("Embed")*/
+	int input_dim = 69;
+	int num_output = 16;
+	add_embed(this->_net_params,top,"embed",input_dim,num_output);
+	add_embed(this->_dnet_params,top,"embed",input_dim,num_output);
+      }
+  }
+  
+  template <class TInputCaffe>
+  void NetInputCaffe<TInputCaffe>::add_embed(caffe::NetParameter *net_param,
+					     const std::string &bottom,
+					     const std::string &top,
+					     const int &input_dim,
+					     const int &num_output)
+  {
+    caffe::LayerParameter *lparam = CaffeCommon::add_layer(net_param,bottom,top,"embed_"+top,"Embed");
+    lparam->mutable_embed_param()->set_input_dim(input_dim);
+    lparam->mutable_embed_param()->set_num_output(num_output);
   }
 
   /*- NetLayersCaffe -*/
@@ -337,7 +360,7 @@ namespace dd
     caffe::LayerParameter *lparam = CaffeCommon::add_layer(net_param,bottom,top,"reshape_"+top,"Reshape");
     lparam->mutable_reshape_param()->CopyFrom(r_param);
   }
-  
+
   void NetLayersCaffe::add_softmax(caffe::NetParameter *net_param,
 				   const std::string &bottom,
 				   const std::string &label,
@@ -383,6 +406,27 @@ namespace dd
       {
 	caffe::LayerParameter *lparam = CaffeCommon::add_layer(net_param,ln_tmp,top,
 							       "loss","EuclideanLoss"); // train
+	lparam->add_bottom(label);
+	caffe::NetStateRule *nsr = lparam->add_include();
+	nsr->set_phase(caffe::TRAIN);
+      }
+  }
+
+  void NetLayersCaffe::add_sigmoid_crossentropy_loss(caffe::NetParameter *net_param,
+						     const std::string &bottom,
+						     const std::string &label,
+						     const std::string &top,
+						     const int &num_output,
+						     const bool &deploy)
+  {
+    std::string ln_tmp = "ip_" + top;
+    add_fc(net_param,bottom,ln_tmp,num_output);
+
+
+    if (!deploy)
+      {
+	caffe::LayerParameter *lparam = CaffeCommon::add_layer(net_param,ln_tmp,top,
+							       "loss","SigmoidCrossEntropyLoss"); // train
 	lparam->add_bottom(label);
 	caffe::NetStateRule *nsr = lparam->add_include();
 	nsr->set_phase(caffe::TRAIN);
